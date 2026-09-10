@@ -306,6 +306,139 @@ Live execution остаётся **CLOSED**. До первого exact-order prob
 До этого: никаких OpenSea order calls, DB writes, listing deactivation или live
 authority. Нынешние `authorityGranted` и `deactivationAuthorityGranted` остаются false.
 
+## IDENTITY PROVENANCE AMENDMENT
+
+### Decision
+
+**B. IDENTITY PROVENANCE DESIGN VALIDATED — CANDIDATE EVIDENCE CHANGE REQUIRED.**
+
+Current trusted `TargetedVerifierContext` has no expected token ID, and the current
+candidate/barrier graph cannot supply one. `OfflineLocalOrder`, candidate order
+explanations, `SeenOrderRecord`, candidate/barrier envelopes and generation
+advancement carry orderHash/classification or hashes only. `NormalizedActiveListing`
+and PostgreSQL `token_id` are upstream material not committed into the validated
+candidate envelope; they cannot be treated as implicit trusted sources.
+
+### Selected chain and constructor rule
+
+Use one canonical identity object in candidate semantic output, then derive context
+only from reconstructed, hash-validated integrated evidence:
+
+```text
+local active order + local NFT identity
+  -> candidate model v2 identity
+  -> candidate envelope v2 / candidateBundleHash / durable contentHash
+  -> barrier candidateArtifactHash link + generation eligibility
+  -> reconstructIntegratedEvidence = VALID
+  -> deriveTargetedVerifierContext(integratedEvidence, orderHash)
+  -> pure OpenSea adapter
+  -> ProviderResult and TargetedVerifierArtifact
+```
+
+The context constructor must require a VALID graph, one `ABSENT_CANDIDATE` entry,
+canonical identity validation, candidate/envelope/content hashes, barrier link,
+generation linkage and authority=false invariants. It must deep-freeze the copied
+identity and have no `expectedTokenId` caller argument.
+
+Canonical identity:
+
+```text
+orderHash       lower-case 0x + 64 hex
+chain           canonical supported chain
+contractAddress lower-case 0x + 40 hex
+tokenId         unsigned decimal string: 0 or non-zero without leading zero
+collectionSlug  non-empty canonical scope slug
+protocolAddress lower-case 0x + 40 hex
+```
+
+`nftId` is derived presentation only. No `Number()` conversion is allowed for
+token IDs; `7` is canonical and `007` is rejected.
+
+Option A (context-only field) is rejected because a caller could supply a valid
+decimal token unrelated to candidate evidence. Option C (parallel identity artifact)
+is redundant: candidate envelope/content hash is already the durable handoff and
+barrier already commits its exact artifact hash.
+
+### Fields at each boundary
+
+| Boundary | Required identity/provenance |
+| --- | --- |
+| local candidate input | orderHash, chain, contractAddress, tokenId, collectionSlug, protocolAddress from one validated local projection |
+| candidate model v2 | one frozen canonical identity object per order explanation; candidate hash commits it |
+| candidate envelope v2 | payload + candidateBundleHash + source/sweep/model/schema provenance |
+| generation/barrier | advancement may remain orderHash/classification; candidateArtifactHash binds candidate identity; no second token source |
+| derived context | expectedTokenId/full identity copied only from VALID reconstructed candidate artifact |
+| adapter observation | context expectedTokenId plus separate provider assetIdentifier and offer identifier |
+| ProviderResult | normalizedOrder.assetIdentifier is provider value plus context-bound expected identity comparison |
+| durable artifact/attempt | expectedTokenId, provider identity, comparison, candidate/barrier/generation hashes and versions |
+
+The expected field in ProviderResult/artifact is a copied context proof, not a
+second authority. Runtime construction requires equality with derived context.
+
+### Order hash and three-way identity
+
+Order hash is cryptographic Seaport order identity, not NFT identity. It does not
+rule out ERC1155, criteria, multi-item or wrong local association. OpenSea asset /
+offer agreement proves provider internal consistency only. Positive evidence needs:
+
+```text
+candidate.identity.tokenId
+ == adapter.order.asset.identifier
+ == adapter.order.protocol_data.parameters.offer[0].identifierOrCriteria
+```
+
+with exact orderHash/chain/contract/protocol, one ERC721 offer, quantity, noncriteria
+shape and existing time/status gates. Correct hash + wrong local token, provider
+agreement + local mismatch, lexical `7`/`007`, forged caller token, tampered
+candidate, candidate/barrier mismatch and clone/JSON-roundtrip provenance all fail
+closed. Same token with multiple order hashes remains separate contexts.
+
+### Versioning amendment
+
+The previous statement that candidate/generation versions need not change is amended:
+
+| Version | Decision | Reason |
+| --- | --- | --- |
+| `OFFLINE_CANDIDATE_MODEL_VERSION` | bump v1 -> v2 | candidate semantic output gains NFT identity |
+| `CANDIDATE_ENVELOPE_SCHEMA_VERSION` | bump v1 -> v2 | persisted payload/hash contract changes |
+| `TARGETED_VERIFIER_SCHEMA_VERSION` | bump v1 -> v2 | context/attempt/artifact identity proof changes |
+| `TARGETED_VERIFIER_POLICY_VERSION` | bump v1 -> v2 | derived-context and three-way identity policy changes |
+| `OFFLINE_GENERATION_MODEL_VERSION` | retain v1 | generation decisions remain orderHash/classification and candidate hash is linked |
+| `BARRIER_ENVELOPE_SCHEMA_VERSION` | retain v1 minimally | barrier payload unchanged; candidateArtifactHash binds v2 candidate bytes |
+
+If token identity is duplicated into `candidateAdvancement` or barrier payload,
+generation and barrier versions must also bump. That redundant design is not selected.
+
+### Artifact, fence and semantic identity
+
+- Context gains immutable `expectedTokenId` and full identity derived from evidence.
+- Wire `RequestIdentity` remains endpoint/chain/protocol/order; token is not a path
+  parameter. Canonical attempt identity and `semanticEvidenceHash` include full
+  local identity, especially expectedTokenId, so different local-token contexts
+  cannot be idempotent.
+- `OpenSeaExactOrderObservationV1` carries provider asset/offer identifiers and the
+  context-bound expected token for explicit comparison.
+- `ProviderResult.normalizedOrder.assetIdentifier` remains provider data; do not
+  overwrite it with local token. Add context-bound comparison evidence at result
+  boundary.
+- `TargetedVerifierArtifact` and `AttemptEvidence` carry expectedTokenId, provider
+  identity, comparison result, candidate/barrier/generation hashes and versions.
+- Journal fence fingerprint does not need duplicate token ID: it fences order events,
+  while candidate identity is already committed by candidate artifact. Any available
+  event/NFT identity must still be checked against context before fence construction;
+  adding another fingerprint token field would create redundant truth and an event
+  model version.
+
+### Amended gate
+
+Updated totals: **BLOCKER 4 / HIGH 6 / MEDIUM 4 / LOW 2**. Original OpenSea schema,
+status, Date, JSON precision, transport and hash findings remain unchanged.
+
+`PURE RESPONSE ADAPTER IMPLEMENTATION = NOT AUTHORIZED` until candidate model v2,
+candidate envelope v2, derived-context constructor, artifact/attempt identity
+binding and adversarial offline tests are implemented and independently audited.
+`HTTP TRANSPORT IMPLEMENTATION = NOT AUTHORIZED`.
+
 ## Findings и следующий этап
 
 Severity totals: **BLOCKER 3, HIGH 5, MEDIUM 4, LOW 2**; подробный реестр находится

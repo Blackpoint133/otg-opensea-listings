@@ -184,6 +184,128 @@ contract-remediation finding, не изменение в рамках этого
 2. L2 — provider/normalizer/schema/policy v1 identifiers нельзя сохранять после
    изменения официальной schema boundary и semantics.
 
+## IDENTITY PROVENANCE AMENDMENT
+
+### Фактический ответ на вопрос provenance
+
+В текущем main **trusted expectedTokenId не существует**.
+
+Проверенные границы:
+
+- `OfflineLocalOrder` (`offlineCandidateModel.ts:75-84`) содержит `orderHash`,
+  status/active/reconciliation flags и event timestamps, но не `chain`,
+  `contractAddress`, `tokenId`, `collectionSlug` или `protocolAddress`.
+- `OfflineOrderExplanation` и `OfflineCandidateBundle` (`offlineCandidateModel.ts:103-135`)
+  переносят только `orderHash`, classification, reasons и journal summaries.
+- `SeenOrder`/`SeenOrderRecord` (`offlineCandidateModel.ts:63-70`,
+  `evidenceTypes.ts:48-54`) хранят order hash, page number и hashes, но не NFT
+  identity payload.
+- `CandidateEvidenceEnvelope` и `BarrierEvidenceEnvelope`
+  (`reconciliationEvidenceIntegration.ts:10-36`) хешируют payload и связывают
+  barrier с `candidateArtifactHash`, но payload candidate сейчас не содержит
+  token ID. `candidateGenerationConsistent` сравнивает только orderHash и
+  classification (`reconciliationEvidenceIntegration.ts:63-70`).
+- `OfflineGenerationCandidateAdvance` переносит orderHash/classification,
+  eligibility и reasons; token identity там отсутствует.
+- `TargetedVerifierContext` (`targetedVerifierTypes.ts:49-74`) содержит order,
+  chain, collection, contract, protocol и artifact hashes, но expected token ID
+  отсутствует. `validateTargetedVerifierEligibility` не может проверить его
+  provenance.
+
+Наличие `token_id` в PostgreSQL, `NormalizedActiveListing.tokenId` или отдельных
+event/NFT rows не является доказательством handoff: ни один источник сейчас не
+входит в validated candidate bundle и не связан его content hash с targeted
+verifier context. Caller мог бы подменить well-formed token string.
+
+### Выбранная минимальная архитектура: option B
+
+**B. Extend candidate output/evidence with canonical local NFT identity and derive
+`TargetedVerifierContext` only from that persisted identity.**
+
+Option A (`expectedTokenId` только в context) отклонён: поле было бы syntactically
+valid, но caller-controlled. Option C (parallel identity artifact) создаёт второй
+источник истины и новую consistency surface; существующий candidate envelope уже
+является durable hashed handoff.
+
+Единая canonical identity в candidate payload:
+
+```text
+{
+  orderHash: lower-case 0x + 64 hex,
+  chain: canonical supported chain,
+  contractAddress: lower-case 0x + 40 hex,
+  tokenId: canonical unsigned decimal string (0 or non-zero без leading zero),
+  collectionSlug: non-empty canonical slug,
+  protocolAddress: lower-case 0x + 40 hex
+}
+```
+
+`nftId` может быть derived presentation value, но не отдельный source of truth.
+Новый context constructor принимает только reconstructed VALID integrated evidence,
+находит ровно один candidate entry по orderHash, проверяет classification/identity,
+candidate payload hash, envelope contentHash и barrier link, затем копирует identity
+в immutable context. `expectedTokenId` нельзя передать отдельным caller argument.
+
+Trusted chain:
+
+```text
+local active order identity
+ -> OfflineLocalOrder identity input
+ -> OfflineOrderExplanation.identity (candidate model v2)
+ -> candidateBundleHash / candidate envelope v2 / durable contentHash
+ -> barrier candidateArtifactHash + generation eligibility
+ -> reconstructed VALID integrated evidence
+ -> derived TargetedVerifierContext.expectedTokenId
+ -> adapter compares provider asset.identifier == offer.identifierOrCriteria
+    == context.expectedTokenId
+ -> ProviderResult / durable artifact
+```
+
+Boundary requirements: local input, candidate payload и context несут orderHash,
+chain, contractAddress, tokenId, collectionSlug и protocolAddress из одной
+canonical identity. Envelope commits payload hash; barrier не дублирует token ID,
+а связывается с exact candidate artifact hash. Adapter сохраняет provider value
+отдельно от expected local value.
+
+### Order hash is necessary but not sufficient
+
+Seaport order hash — cryptographic identity signed order, но не proof ожидаемого
+NFT: order может быть ERC1155, criteria, multi-item или просто связан с другим
+локальным NFT. Agreement OpenSea `asset` и Seaport offer доказывает только provider
+response consistency и не защищает от wrong response material/provider-schema bug.
+
+Положительное evidence требует:
+
+```text
+trusted local candidate tokenId
+  == OpenSea order.asset.identifier
+  == OpenSea protocol_data.parameters.offer[0].identifierOrCriteria
+```
+
+Плюс exact orderHash/chain/contract/protocol, один ERC721 offer, quantity и все
+существующие status/time gates. Same token с несколькими order hashes допустим как
+разные contexts; unrelated tokens reject. `7` canonical, `007` reject.
+
+### Version consequences
+
+Предыдущие totals `BLOCKER 3 / HIGH 5 / MEDIUM 4 / LOW 2` изменяются на
+**BLOCKER 4 / HIGH 6 / MEDIUM 4 / LOW 2**:
+
+- новый **B4**: trusted candidate-to-context NFT identity handoff отсутствует;
+- новый **H6**: candidate/barrier reconstruction сравнивает только orderHash/class.
+
+Required changes:
+
+- `OFFLINE_CANDIDATE_MODEL_VERSION`: bump v1 -> v2, candidate gains identity;
+- `CANDIDATE_ENVELOPE_SCHEMA_VERSION`: bump v1 -> v2, persisted payload/hash changes;
+- `TARGETED_VERIFIER_SCHEMA_VERSION`: bump v1 -> v2, context/attempt/artifact proof changes;
+- `TARGETED_VERIFIER_POLICY_VERSION`: bump v1 -> v2, three-way identity policy changes;
+- `OFFLINE_GENERATION_MODEL_VERSION`: retain v1 if advancement remains
+  orderHash/classification and `candidateArtifactHash` remains the binding;
+- `BARRIER_ENVELOPE_SCHEMA_VERSION`: retain v1 for minimal design because barrier
+  payload is unchanged and already commits candidate content hash. If identity is
+  duplicated into advancement/barrier, both generation and barrier versions must bump.
+
 ## Gate
 
 Official schema sufficiency: **SUFFICIENT FOR A PINNED PURE ADAPTER**.

@@ -3,8 +3,8 @@ import { CANONICALIZATION_VERSION, EVIDENCE_SCHEMA_VERSION, type ArtifactRef, ty
 import { OFFLINE_AUTHORITY_STATEMENT, OFFLINE_CANDIDATE_MODEL_VERSION, validateOfflineCandidateBundle } from "../offlineCandidateModel.js";
 import { OFFLINE_GENERATION_MODEL_VERSION, validateOfflineGenerationResult } from "../offlineGenerationBarrierModel.js";
 
-export const CANDIDATE_ENVELOPE_SCHEMA_VERSION = "candidate-bundle-envelope-v2" as const;
-export const BARRIER_ENVELOPE_SCHEMA_VERSION = "barrier-evaluation-envelope-v1" as const;
+export const CANDIDATE_ENVELOPE_SCHEMA_VERSION = "candidate-bundle-envelope-v3" as const;
+export const BARRIER_ENVELOPE_SCHEMA_VERSION = "barrier-evaluation-envelope-v2" as const;
 export const INTEGRATION_SEMANTIC_STATEMENT = "BARRIER PREREQUISITES ONLY. NO ORDER VERIFICATION. NO DEACTIVATION AUTHORITY." as const;
 
 export interface CandidateEvidenceEnvelope {

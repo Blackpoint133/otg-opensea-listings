@@ -32,8 +32,8 @@ async function walkScripts(dir) {
   }
   return result;
 }
-await cp(join(root, "tests", "fixtures"), join(root, ".codex-test-tmp", "tests", "fixtures"), { recursive: true, force: true }).catch(() => {});
-await cp(join(root, "sql"), join(root, ".codex-test-tmp", "sql"), { recursive: true, force: true }).catch(() => {});
+await cp(join(root, "tests", "fixtures"), join(root, ".codex-test-tmp", "tests", "fixtures"), { recursive: true, force: true });
+await cp(join(root, "sql"), join(root, ".codex-test-tmp", "sql"), { recursive: true, force: true });
 await cp(join(root, "src"), join(root, ".codex-test-tmp", "src"), { recursive: true, force: true });
 await cp(join(root, "scripts"), join(root, ".codex-test-tmp", "scripts"), { recursive: true, force: true });
 await cp(join(root, "package.json"), join(root, ".codex-test-tmp", "package.json"), { force: true });

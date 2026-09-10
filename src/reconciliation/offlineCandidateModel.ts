@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { ADDRESS_PATTERN, ORDER_HASH_PATTERN, SUPPORTED_CHAIN, SUPPORTED_COLLECTION_SLUG, TOKEN_ID_PATTERN, validateCanonicalIdentity } from "./identityScope.js";
 
-export const OFFLINE_CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v2" as const;
+export const OFFLINE_CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v3" as const;
 export const OFFLINE_AUTHORITY_STATEMENT = "THIS OFFLINE MODEL DOES NOT AUTHORIZE DEACTIVATION." as const;
 
 export type GenerationState = "OPEN" | "TRANSPORT_COMPLETE" | "CATCHING_UP" | "VERIFIED" | "ABORTED";
@@ -26,6 +27,7 @@ export const OFFLINE_REASON_CODES = [
   "UNKNOWN_PROCESSING_STATUS",
   "IDENTITY_AMBIGUOUS"
   ,"INVALID_LOCAL_IDENTITY"
+  ,"UNSUPPORTED_LOCAL_SCOPE"
 ] as const;
 
 export type OfflineReasonCode = (typeof OFFLINE_REASON_CODES)[number];
@@ -88,10 +90,10 @@ export interface OfflineLocalOrder {
 
 export interface OfflineCandidateIdentity {
   readonly orderHash: string;
-  readonly chain: "gunzilla";
+  readonly chain: typeof SUPPORTED_CHAIN;
   readonly contractAddress: string;
   readonly tokenId: string;
-  readonly collectionSlug: "off-the-grid";
+  readonly collectionSlug: typeof SUPPORTED_COLLECTION_SLUG;
   readonly protocolAddress: string;
 }
 
@@ -201,16 +203,8 @@ function requireNonNegativeInteger(value: unknown, name: string): boolean {
   return Number.isSafeInteger(value) && (value as number) >= 0 && name.length > 0;
 }
 
-const ORDER_HASH = /^0x[0-9a-f]{64}$/;
-const ADDRESS = /^0x[0-9a-f]{40}$/;
-const TOKEN_ID = /^(0|[1-9][0-9]*)$/;
 export function validateOfflineCandidateIdentity(value: unknown): value is OfflineCandidateIdentity {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const row = value as Record<string, unknown>;
-  return typeof row.orderHash === "string" && ORDER_HASH.test(row.orderHash)
-    && row.chain === "gunzilla" && typeof row.contractAddress === "string" && ADDRESS.test(row.contractAddress)
-    && typeof row.tokenId === "string" && TOKEN_ID.test(row.tokenId)
-    && row.collectionSlug === "off-the-grid" && typeof row.protocolAddress === "string" && ADDRESS.test(row.protocolAddress);
+  return validateCanonicalIdentity(value) === "VALID";
 }
 
 function identityKey(identity: OfflineCandidateIdentity): string {
@@ -304,7 +298,9 @@ export function classifyOfflineCandidates(input: {
     const events = input.journalEvents.filter((event) => event.orderHash !== null && orderKey(event.orderHash) === key).sort((a, b) => a.eventId.localeCompare(b.eventId));
     const reasons: OfflineReasonCode[] = [];
     if (!key || (localKeyCounts.get(key) ?? 0) > 1 || localKeys.has(key) || identityAmbiguity.has(key)) reasons.push("IDENTITY_AMBIGUOUS");
-    if (!validateOfflineCandidateIdentity(order.identity)) reasons.push("INVALID_LOCAL_IDENTITY");
+    const identityStatus = validateCanonicalIdentity(order.identity);
+    const identityMatchesOrder = identityStatus === "VALID" && order.identity.orderHash === key;
+    if (!identityMatchesOrder) reasons.push(identityStatus === "VALID" ? "INVALID_LOCAL_IDENTITY" : identityStatus);
     if ((identityKeys.get(key)?.size ?? 0) > 1) reasons.push("IDENTITY_AMBIGUOUS");
     localKeys.add(key);
     if (!validation.eligible) reasons.push(...validation.reasons);
@@ -378,7 +374,9 @@ export function validateOfflineCandidateBundle(value: unknown): OfflineCandidate
     if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash) || hash !== hash.toLowerCase()) reasons.push("INVALID_CANDIDATE_IDENTITY");
     else if (orderHashes.has(hash)) reasons.push("IDENTITY_AMBIGUOUS"); else orderHashes.add(hash);
     if (order.authorityGranted !== false) reasons.push("INVALID_CANDIDATE_AUTHORITY");
-    if (!Object.isFrozen(order.identity) || !validateOfflineCandidateIdentity(order.identity) || (order.identity as unknown as Record<string, unknown>).orderHash !== hash) reasons.push("INVALID_LOCAL_IDENTITY");
+    const identityStatus = validateCanonicalIdentity(order.identity);
+    if (!Object.isFrozen(order.identity) || identityStatus === "INVALID_LOCAL_IDENTITY" || (order.identity as unknown as Record<string, unknown>).orderHash !== hash) reasons.push("INVALID_LOCAL_IDENTITY");
+    if (identityStatus === "UNSUPPORTED_LOCAL_SCOPE" && order.classification !== "BLOCKED") reasons.push("UNSUPPORTED_LOCAL_SCOPE");
     if (order.classification !== "PRESENT" && order.classification !== "ABSENT_CANDIDATE" && order.classification !== "BLOCKED") reasons.push("INVALID_CANDIDATE_BUNDLE");
     else if (order.classification === "PRESENT") present += 1; else if (order.classification === "ABSENT_CANDIDATE") absent += 1; else blocked += 1;
     const orderReasons = order.reasons;

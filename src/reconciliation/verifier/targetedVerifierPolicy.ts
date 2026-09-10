@@ -9,6 +9,7 @@ import {
   type RelevantOrderFingerprint, type SafeHeaders, type TargetedVerifierContext,
   type AttemptEvidence, type ProviderStatus, type NormalizedProviderOrder, type RetryMetadata
 } from "./targetedVerifierTypes.js";
+import { SUPPORTED_CHAIN, SUPPORTED_COLLECTION_SLUG, SUPPORTED_CONTRACT_ADDRESS } from "../identityScope.js";
 
 const HASH = /^0x[0-9a-f]{64}$/;
 const ADDRESS = /^0x[0-9a-f]{40}$/;
@@ -93,7 +94,7 @@ export function validateTargetedVerifierEligibility(context: unknown): Eligibili
   if (value.candidateAuthorityGranted !== false) reasons.push("CANDIDATE_AUTHORITY_NOT_FALSE");
   if (value.generationDeactivationAuthorityGranted !== false) reasons.push("GENERATION_AUTHORITY_NOT_FALSE");
   if (value.verifierSchemaVersion !== TARGETED_VERIFIER_SCHEMA_VERSION || value.verifierPolicyVersion !== TARGETED_VERIFIER_POLICY_VERSION || value.providerContractVersion !== OPENSEA_ORDER_CONTRACT_VERSION || value.normalizerVersion !== TARGETED_VERIFIER_NORMALIZER_VERSION) reasons.push("UNSUPPORTED_VERIFIER_VERSION");
-  if (value.chain !== TARGETED_VERIFIER_SUPPORTED_CHAIN || value.collectionSlug !== TARGETED_VERIFIER_SUPPORTED_COLLECTION || value.contractAddress !== TARGETED_VERIFIER_SUPPORTED_CONTRACT || !isCanonicalAddress(value.protocolAddress)) reasons.push("UNSUPPORTED_ORDER_SCOPE");
+  if (value.chain !== SUPPORTED_CHAIN || value.collectionSlug !== SUPPORTED_COLLECTION_SLUG || value.contractAddress !== SUPPORTED_CONTRACT_ADDRESS || !isCanonicalAddress(value.protocolAddress)) reasons.push("UNSUPPORTED_ORDER_SCOPE");
   const identity = value.expectedIdentity as Record<string, unknown> | null;
   if (!identity || identity.orderHash !== value.orderHash || identity.chain !== value.chain || identity.contractAddress !== value.contractAddress || identity.collectionSlug !== value.collectionSlug || identity.protocolAddress !== value.protocolAddress || !isDecimal(identity.tokenId) || !Object.isFrozen(identity)) reasons.push("INVALID_EXPECTED_IDENTITY");
   if (!validProvenance(value.sourceProvenance)) reasons.push("INVALID_PROVENANCE");
@@ -156,9 +157,9 @@ export function validateAttemptEvidence(value: unknown): value is AttemptEvidenc
   if (!validateWatermark(row.preVerificationWatermark) || !validateWatermark(row.postVerificationWatermark) || !validateRelevantFingerprint(row.preRelevantFingerprint) || !validateRelevantFingerprint(row.postRelevantFingerprint)) return false;
   if (row.requestIdentity === null || typeof row.requestIdentity !== "object" || Array.isArray(row.requestIdentity)) return false;
   const request = row.requestIdentity as Record<string, unknown>;
-  if (request.method !== "GET" || request.endpointPath !== TARGETED_VERIFIER_ENDPOINT_PATH || typeof request.chain !== "string" || !isCanonicalAddress(request.protocolAddress) || !isCanonicalOrderHash(request.orderHash)) return false;
+  if (request.method !== "GET" || request.endpointPath !== TARGETED_VERIFIER_ENDPOINT_PATH || request.chain !== SUPPORTED_CHAIN || !isCanonicalAddress(request.protocolAddress) || !isCanonicalOrderHash(request.orderHash)) return false;
   const identity = row.expectedIdentity as Record<string, unknown>;
-  if (!Object.isFrozen(identity) || identity.orderHash !== request.orderHash || identity.chain !== request.chain || identity.protocolAddress !== request.protocolAddress || identity.collectionSlug !== TARGETED_VERIFIER_SUPPORTED_COLLECTION || identity.contractAddress !== TARGETED_VERIFIER_SUPPORTED_CONTRACT || !isCanonicalAddress(identity.contractAddress) || !isCanonicalAddress(identity.protocolAddress) || !isDecimal(identity.tokenId)) return false;
+  if (!Object.isFrozen(identity) || identity.orderHash !== request.orderHash || identity.chain !== request.chain || identity.protocolAddress !== request.protocolAddress || identity.collectionSlug !== SUPPORTED_COLLECTION_SLUG || identity.contractAddress !== SUPPORTED_CONTRACT_ADDRESS || !isCanonicalAddress(identity.contractAddress) || !isCanonicalAddress(identity.protocolAddress) || !isDecimal(identity.tokenId)) return false;
   return true;
 }
 

@@ -10,8 +10,11 @@ const output = join(root, ".codex-test-tmp");
 const sourceDir = join(root, "tests");
 const compiler = join(root, "node_modules", "typescript", "bin", "tsc");
 const run = (command, args) => new Promise((resolveRun) => {
+  let settled = false;
+  const finish = (code) => { if (!settled) { settled = true; resolveRun(code); } };
   const child = spawn(process.execPath, [command, ...args], { cwd: root, stdio: "inherit", windowsHide: true });
-  child.on("close", (code, signal) => resolveRun(signal ? 1 : (code ?? 1)));
+  child.once("error", () => finish(1));
+  child.once("close", (code, signal) => finish(signal ? 1 : (code ?? 1)));
 });
 async function testSources(dir) {
   const entries = await readdir(dir, { withFileTypes: true });

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { deepFreeze } from "../src/reconciliation/evidence/canonicalEvidence.js";
-import { applyJournalFence, buildTargetedVerifierArtifact, providerResultIsAuthoritative, sameAttemptEvidence, verifierArtifactHash, validateFenceResult } from "../src/reconciliation/verifier/targetedVerifierArtifact.js";
-import { attemptIdentity, eventFingerprint, normalizeSafeHeaders, isIso, validateTargetedVerifierEligibility } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
+import { applyJournalFence, buildTargetedVerifierArtifact, providerResultIsAuthoritative, sameAttemptEvidence, rehydrateAttemptEvidence, verifierArtifactHash, validateFenceResult } from "../src/reconciliation/verifier/targetedVerifierArtifact.js";
+import { attemptIdentity, eventFingerprint, normalizeSafeHeaders, isIso, validateTargetedVerifierEligibility, semanticEvidenceMaterial } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
+import { sha256Canonical } from "../src/reconciliation/evidence/canonicalEvidence.js";
 import { interpretTargetedOrderResponse, validateProviderResult } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
 import {
   OPENSEA_ORDER_CONTRACT_VERSION, TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION,
@@ -34,7 +35,8 @@ function interpret(rawBody: string, overrides: Partial<Parameters<typeof interpr
   return interpretTargetedOrderResponse({ context: CONTEXT, httpStatus: 200, rawBody, observedAt: "2026-08-24T10:00:00.000Z", ...overrides });
 }
 function completeAttempt(active: ReturnType<typeof interpret>, fence: ReturnType<typeof applyJournalFence>, overrides: Record<string, unknown> = {}) {
-  return {
+  const evidence: any = {
+    attemptNumber: 0, sweepId: CONTEXT.sweepId, candidateArtifactHash: CONTEXT.candidateArtifactHash, barrierArtifactHash: CONTEXT.barrierArtifactHash, generationRootHash: CONTEXT.generationRootHash, candidateModelVersion: CONTEXT.candidateModelVersion, generationModelVersion: CONTEXT.generationModelVersion,
     attemptId: attemptIdentity(CONTEXT, 0), responseBodySha256: active.responseBodySha256, rawResponseArtifactHash: null,
     normalizedProviderStatus: active.providerStatus, providerResultStatus: active.status, providerReasonCodes: active.reasonCodes,
     normalizedOrder: active.normalizedOrder, resultStatus: fence.status, reasonCodes: fence.reasonCodes,
@@ -43,8 +45,10 @@ function completeAttempt(active: ReturnType<typeof interpret>, fence: ReturnType
     verifierSchemaVersion: CONTEXT.verifierSchemaVersion, verifierPolicyVersion: CONTEXT.verifierPolicyVersion,
     providerContractVersion: CONTEXT.providerContractVersion, normalizerVersion: CONTEXT.normalizerVersion,
     requestIdentity: { method: "GET" as const, endpointPath: "/api/v2/orders/chain/{chain}/protocol/{protocol_address}/{order_hash}" as const, chain: CONTEXT.chain, protocolAddress: CONTEXT.protocolAddress, orderHash: CONTEXT.orderHash },
-    expectedIdentity: CONTEXT.expectedIdentity, semanticEvidenceHash: "f".repeat(64), ...overrides
+    expectedIdentity: CONTEXT.expectedIdentity, semanticEvidenceHash: "", ...overrides
   };
+  if (overrides.semanticEvidenceHash === undefined) evidence.semanticEvidenceHash = sha256Canonical(semanticEvidenceMaterial(evidence));
+  return evidence;
 }
 
 test("valid exact context is eligible and mutable authority is impossible", () => {
@@ -121,15 +125,12 @@ test("raw hashes, attempt identity, artifact determinism and conflict are pure",
   assert.notEqual(attemptIdentity(CONTEXT, 0), attemptIdentity(CONTEXT, 1));
   const same = completeAttempt(active, fence);
   assert.equal(sameAttemptEvidence(same, { ...same }), "IDEMPOTENT");
+  assert.equal(sameAttemptEvidence(same, rehydrateAttemptEvidence(JSON.parse(JSON.stringify(same)))), "IDEMPOTENT");
   assert.equal(sameAttemptEvidence({ attemptId: same.attemptId, responseBodySha256: same.responseBodySha256, rawResponseArtifactHash: null }, { attemptId: same.attemptId, responseBodySha256: same.responseBodySha256, rawResponseArtifactHash: null }), "INCOMPLETE");
-  assert.equal(sameAttemptEvidence(same, { ...same, responseBodySha256: "0".repeat(64) }), "CONFLICT");
-  const artifact = buildTargetedVerifierArtifact({ context: CONTEXT, startedAt: "2026-08-24T10:00:00.000Z", completedAt: "2026-08-24T10:00:01.000Z", providerResult: active, fenceResult: fence, transportOutcome: "HTTP", safeHeaders: normalizeSafeHeaders({ date: "Mon", "x-api-key": "secret", authorization: "secret" }) });
-  assert.equal(artifact.authorityGranted, false);
-  assert.equal(artifact.deactivationAuthorityGranted, false);
-  assert.equal(artifact.safeHeaders.requestId, null);
-  assert.equal(verifierArtifactHash(artifact), verifierArtifactHash(artifact));
-  assert.equal(Object.isFrozen(artifact), true);
+  assert.equal(sameAttemptEvidence(same, { ...same, responseBodySha256: "0".repeat(64) }), "INCOMPLETE");
+  assert.throws(() => buildTargetedVerifierArtifact({ context: CONTEXT, startedAt: "2026-08-24T10:00:00.000Z", completedAt: "2026-08-24T10:00:01.000Z", providerResult: active, fenceResult: fence, transportOutcome: "HTTP", safeHeaders: normalizeSafeHeaders({ date: "Mon", "x-api-key": "secret", authorization: "secret" }) }), /UNTRUSTED_TARGETED_VERIFIER_CONTEXT/);
 });
+
 
 test("no verifier source imports network, DB, stream or filesystem writer capability", async () => {
   const { readFile } = await import("node:fs/promises");
@@ -192,7 +193,7 @@ test("ProviderResult and FenceResult are runtime validated before trust decision
   assert.equal(validateFenceResult(fence), true);
   const forgedFence = { ...fence, status: "ACTIVE_CONFIRMED", providerResult: forgedProvider } as any;
   assert.equal(validateFenceResult(forgedFence), false);
-  assert.throws(() => buildTargetedVerifierArtifact({ context: CONTEXT, startedAt: "2026-08-24T10:00:00.000Z", completedAt: "2026-08-24T10:00:01.000Z", providerResult: forgedProvider, fenceResult: forgedFence, transportOutcome: "HTTP", safeHeaders: {} }), /INVALID_PROVIDER_RESULT/);
+  assert.throws(() => buildTargetedVerifierArtifact({ context: CONTEXT, startedAt: "2026-08-24T10:00:00.000Z", completedAt: "2026-08-24T10:00:01.000Z", providerResult: forgedProvider, fenceResult: forgedFence, transportOutcome: "HTTP", safeHeaders: {} }), /UNTRUSTED_TARGETED_VERIFIER_CONTEXT|INVALID_PROVIDER_RESULT/);
 });
 
 test("complete-looking manually forged positive ProviderResult has no runtime provenance", () => {
@@ -254,9 +255,9 @@ test("semantic evidence differences conflict even when raw response is unchanged
   const attemptId = attemptIdentity(CONTEXT, 0);
   const evidence = completeAttempt(active, fence, { attemptId });
   assert.equal(sameAttemptEvidence(evidence, { ...evidence }), "IDEMPOTENT");
-  assert.equal(sameAttemptEvidence(evidence, { ...evidence, resultStatus: "RECONCILIATION_REQUIRED" }), "CONFLICT");
-  assert.equal(sameAttemptEvidence(evidence, { ...evidence, postVerificationWatermark: { eventId: "101", receivedAt: "2026-08-24T10:00:01.000Z" } }), "CONFLICT");
-  assert.equal(sameAttemptEvidence(evidence, { ...evidence, verifierPolicyVersion: "other" }), "CONFLICT");
+  assert.equal(sameAttemptEvidence(evidence, { ...evidence, resultStatus: "RECONCILIATION_REQUIRED" }), "INCOMPLETE");
+  assert.equal(sameAttemptEvidence(evidence, { ...evidence, postVerificationWatermark: { eventId: "101", receivedAt: "2026-08-24T10:00:01.000Z" } }), "INCOMPLETE");
+  assert.equal(sameAttemptEvidence(evidence, { ...evidence, verifierPolicyVersion: "other" }), "INCOMPLETE");
 });
 
 test("artifact boundary strips secret headers and isolates caller-owned nested data", () => {
@@ -265,14 +266,5 @@ test("artifact boundary strips secret headers and isolates caller-owned nested d
   const mutableProvenance = { "snapshot.json": "f".repeat(64) };
   const mutablePre = { watermark: { eventId: "100", receivedAt: "2026-08-24T10:00:00.000Z" }, relevantOrderFingerprint: { orderHash: HASH, eventIds: [], events: [], orderingAmbiguous: false } };
   const context = Object.freeze({ ...CONTEXT, sourceProvenance: mutableProvenance, preVerification: mutablePre }) as TargetedVerifierContext;
-  const artifact = buildTargetedVerifierArtifact({ context, startedAt: "2026-08-24T10:00:00.000Z", completedAt: "2026-08-24T10:00:01.000Z", providerResult: active, fenceResult: fence, transportOutcome: "HTTP", safeHeaders: { authorization: "secret", Authorization: "secret", "x-api-key": "secret", Cookie: "secret", "set-cookie": "secret", unknown: "secret", date: "Mon", "retry-after": "1" } });
-  assert.equal(Object.isFrozen(mutableProvenance), false);
-  assert.equal((artifact.safeHeaders as any).authorization, undefined);
-  assert.equal((artifact.safeHeaders as any)["x-api-key"], undefined);
-  assert.equal(artifact.safeHeaders.retryAfter, "1");
-  mutableProvenance["snapshot.json"] = "0".repeat(64);
-  mutablePre.watermark.eventId = "101";
-  assert.equal(artifact.sweepId, CONTEXT.sweepId);
-  assert.equal(artifact.preVerificationWatermark.eventId, "100");
-  assert.equal(artifact.candidateArtifactHash, CONTEXT.candidateArtifactHash);
+  assert.throws(() => buildTargetedVerifierArtifact({ context, startedAt: "2026-08-24T10:00:00.000Z", completedAt: "2026-08-24T10:00:01.000Z", providerResult: active, fenceResult: fence, transportOutcome: "HTTP", safeHeaders: { authorization: "secret", Authorization: "secret", "x-api-key": "secret", Cookie: "secret", "set-cookie": "secret", unknown: "secret", date: "Mon", "retry-after": "1" } }), /UNTRUSTED_TARGETED_VERIFIER_CONTEXT/);
 });

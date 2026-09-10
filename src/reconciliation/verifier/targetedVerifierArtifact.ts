@@ -58,6 +58,7 @@ export interface BuildArtifactInput {
 }
 
 export function buildTargetedVerifierArtifact(input: BuildArtifactInput): TargetedVerifierArtifact {
+  if (!isTrustedTargetedVerifierContext(input.context)) throw new Error("UNTRUSTED_TARGETED_VERIFIER_CONTEXT");
   const eligibility = validateTargetedVerifierEligibility(input.context);
   if (!eligibility.valid) throw new Error(`VERIFIER_NOT_ELIGIBLE:${eligibility.reasons.join(",")}`);
   if (!isIso(input.startedAt) || !isIso(input.completedAt) || Date.parse(input.completedAt) < Date.parse(input.startedAt)) throw new Error("INVALID_VERIFICATION_TIME");
@@ -114,13 +115,24 @@ export function buildTargetedVerifierArtifact(input: BuildArtifactInput): Target
 
 export function verifierArtifactHash(artifact: TargetedVerifierArtifact): string { return sha256Canonical(artifact); }
 export function sameAttemptEvidence(left: unknown, right: unknown): "IDEMPOTENT" | "CONFLICT" | "INCOMPLETE" {
-  const shape = (v: any) => v && typeof v === "object" && isCanonicalHash(v.attemptId) && Array.isArray(v.reasonCodes) && typeof v.resultStatus === "string";
-  const validLeft = shape(left), validRight = shape(right);
+  const validLeft = validateAttemptEvidence(left), validRight = validateAttemptEvidence(right);
   if (!validLeft || !validRight) return "INCOMPLETE";
   const l = left as AttemptEvidence, r = right as AttemptEvidence;
   if (l.attemptId !== r.attemptId) return "CONFLICT";
   const identity = (value: AttemptEvidence) => sha256Canonical(value);
   return identity(l) === identity(r) ? "IDEMPOTENT" : "CONFLICT";
+}
+
+export function sameAttemptEvidenceForContext(context: TargetedVerifierContext, left: unknown, right: unknown): "IDEMPOTENT" | "CONFLICT" | "INCOMPLETE" {
+  if (!validateAttemptEvidenceForContext(left, context) || !validateAttemptEvidenceForContext(right, context)) return "INCOMPLETE";
+  const l = left as AttemptEvidence, r = right as AttemptEvidence;
+  if (l.attemptId !== r.attemptId) return "CONFLICT";
+  return canonicalEvidence(l) === canonicalEvidence(r) ? "IDEMPOTENT" : "CONFLICT";
+}
+
+export function rehydrateAttemptEvidence(value: unknown): AttemptEvidence {
+  if (!validateAttemptEvidence(value)) throw new Error("INVALID_ATTEMPT_EVIDENCE");
+  return deepFreeze(cloneOwned(value)) as AttemptEvidence;
 }
 
 export function validateAttemptEvidenceForContext(value: unknown, context: TargetedVerifierContext): boolean {

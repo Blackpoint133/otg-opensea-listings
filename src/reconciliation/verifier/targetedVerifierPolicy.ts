@@ -94,6 +94,8 @@ export function validateTargetedVerifierEligibility(context: unknown): Eligibili
   if (value.generationDeactivationAuthorityGranted !== false) reasons.push("GENERATION_AUTHORITY_NOT_FALSE");
   if (value.verifierSchemaVersion !== TARGETED_VERIFIER_SCHEMA_VERSION || value.verifierPolicyVersion !== TARGETED_VERIFIER_POLICY_VERSION || value.providerContractVersion !== OPENSEA_ORDER_CONTRACT_VERSION || value.normalizerVersion !== TARGETED_VERIFIER_NORMALIZER_VERSION) reasons.push("UNSUPPORTED_VERIFIER_VERSION");
   if (value.chain !== TARGETED_VERIFIER_SUPPORTED_CHAIN || value.collectionSlug !== TARGETED_VERIFIER_SUPPORTED_COLLECTION || value.contractAddress !== TARGETED_VERIFIER_SUPPORTED_CONTRACT || !isCanonicalAddress(value.protocolAddress)) reasons.push("UNSUPPORTED_ORDER_SCOPE");
+  const identity = value.expectedIdentity as Record<string, unknown> | null;
+  if (!identity || identity.orderHash !== value.orderHash || identity.chain !== value.chain || identity.contractAddress !== value.contractAddress || identity.collectionSlug !== value.collectionSlug || identity.protocolAddress !== value.protocolAddress || !isDecimal(identity.tokenId) || !Object.isFrozen(identity)) reasons.push("INVALID_EXPECTED_IDENTITY");
   if (!validProvenance(value.sourceProvenance)) reasons.push("INVALID_PROVENANCE");
   if (!validateJournalFenceSnapshot(value.preVerification)) reasons.push("INVALID_PRE_VERIFICATION_FENCE");
   if (isCanonicalOrderHash(value.orderHash) && validateJournalFenceSnapshot(value.preVerification) && value.preVerification.relevantOrderFingerprint.orderHash !== value.orderHash) reasons.push("FENCE_ORDER_MISMATCH");
@@ -167,7 +169,7 @@ export function retryMetadataFor(status: number | null, outcome: "HTTP" | "TIMEO
 
 export function attemptIdentity(context: TargetedVerifierContext, attemptNumber: number): string {
   if (!Number.isSafeInteger(attemptNumber) || attemptNumber < 0) throw new Error("INVALID_ATTEMPT_NUMBER");
-  return sha256Bytes(new TextEncoder().encode(canonicalEvidence({ sweepId: context.sweepId, orderHash: context.orderHash, verifierPolicyVersion: context.verifierPolicyVersion, providerContractVersion: context.providerContractVersion, endpointPath: TARGETED_VERIFIER_ENDPOINT_PATH, attemptNumber })));
+  return sha256Bytes(new TextEncoder().encode(canonicalEvidence({ sweepId: context.sweepId, orderHash: context.orderHash, expectedIdentity: context.expectedIdentity, verifierPolicyVersion: context.verifierPolicyVersion, providerContractVersion: context.providerContractVersion, endpointPath: TARGETED_VERIFIER_ENDPOINT_PATH, attemptNumber })));
 }
 
 export function relevantFingerprintKey(value: RelevantOrderFingerprint): string { return canonicalEvidence(value); }

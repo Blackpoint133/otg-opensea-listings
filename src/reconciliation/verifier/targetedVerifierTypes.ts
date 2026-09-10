@@ -1,10 +1,10 @@
 import { deepFreeze } from "../evidence/canonicalEvidence.js";
 
-export const TARGETED_VERIFIER_SCHEMA_VERSION = "targeted-verifier-schema-v1" as const;
-export const TARGETED_VERIFIER_POLICY_VERSION = "targeted-verifier-policy-v1" as const;
+export const TARGETED_VERIFIER_SCHEMA_VERSION = "targeted-verifier-schema-v2" as const;
+export const TARGETED_VERIFIER_POLICY_VERSION = "targeted-verifier-policy-v2" as const;
 export const OPENSEA_ORDER_CONTRACT_VERSION = "opensea-get-order-v1-2026-05" as const;
 export const TARGETED_VERIFIER_NORMALIZER_VERSION = "targeted-verifier-normalizer-v1" as const;
-export const TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v1" as const;
+export const TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v2" as const;
 export const TARGETED_VERIFIER_GENERATION_MODEL_VERSION = "active-listings-offline-generation-barrier-v1" as const;
 export const TARGETED_VERIFIER_ENDPOINT_PATH = "/api/v2/orders/chain/{chain}/protocol/{protocol_address}/{order_hash}" as const;
 export const TARGETED_VERIFIER_SUPPORTED_CHAIN = "gunzilla" as const;
@@ -58,6 +58,7 @@ export interface TargetedVerifierContext {
   readonly collectionSlug: string;
   readonly contractAddress: string;
   readonly protocolAddress: string;
+  readonly expectedIdentity: Readonly<{ orderHash: string; chain: string; contractAddress: string; tokenId: string; collectionSlug: string; protocolAddress: string }>;
   readonly candidateClassification: CandidateClassification;
   readonly targetedVerifierEligible: boolean;
   readonly candidateAuthorityGranted: false;
@@ -153,6 +154,7 @@ export interface TargetedVerifierArtifact {
   readonly collectionSlug: string;
   readonly contractAddress: string;
   readonly protocolAddress: string;
+  readonly expectedIdentity: Readonly<{ orderHash: string; chain: string; contractAddress: string; tokenId: string; collectionSlug: string; protocolAddress: string }>;
   readonly verificationStartedAt: string;
   readonly verificationCompletedAt: string;
   readonly providerObservedAt: string | null;
@@ -196,6 +198,7 @@ export interface AttemptEvidence {
   readonly normalizerVersion: string;
   readonly requestIdentity: RequestIdentity;
   readonly semanticEvidenceHash: string;
+  readonly expectedIdentity?: Readonly<{ orderHash: string; chain: string; contractAddress: string; tokenId: string; collectionSlug: string; protocolAddress: string }>;
 }
 
 export type VerifierLifecycle = "NOT_STARTED" | "REQUEST_PENDING" | "RESPONSE_OBSERVED" | "PENDING_FENCE" | "COMPLETE" | "FAILED";

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-export const OFFLINE_CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v1" as const;
+export const OFFLINE_CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v2" as const;
 export const OFFLINE_AUTHORITY_STATEMENT = "THIS OFFLINE MODEL DOES NOT AUTHORIZE DEACTIVATION." as const;
 
 export type GenerationState = "OPEN" | "TRANSPORT_COMPLETE" | "CATCHING_UP" | "VERIFIED" | "ABORTED";
@@ -25,6 +25,7 @@ export const OFFLINE_REASON_CODES = [
   "UNKNOWN_EVENT_TYPE",
   "UNKNOWN_PROCESSING_STATUS",
   "IDENTITY_AMBIGUOUS"
+  ,"INVALID_LOCAL_IDENTITY"
 ] as const;
 
 export type OfflineReasonCode = (typeof OFFLINE_REASON_CODES)[number];
@@ -82,6 +83,16 @@ export interface OfflineLocalOrder {
   lastReconciledAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+  identity: OfflineCandidateIdentity;
+}
+
+export interface OfflineCandidateIdentity {
+  readonly orderHash: string;
+  readonly chain: "gunzilla";
+  readonly contractAddress: string;
+  readonly tokenId: string;
+  readonly collectionSlug: "off-the-grid";
+  readonly protocolAddress: string;
 }
 
 export interface OfflineJournalEvent {
@@ -117,6 +128,7 @@ export interface OfflineOrderExplanation {
     readonly processingStatus: OfflineJournalProcessingStatus;
   }>;
   readonly authorityGranted: false;
+  readonly identity: OfflineCandidateIdentity;
 }
 
 export interface OfflineCandidateBundle {
@@ -187,6 +199,22 @@ function deepFreeze<T>(value: T): T {
 
 function requireNonNegativeInteger(value: unknown, name: string): boolean {
   return Number.isSafeInteger(value) && (value as number) >= 0 && name.length > 0;
+}
+
+const ORDER_HASH = /^0x[0-9a-f]{64}$/;
+const ADDRESS = /^0x[0-9a-f]{40}$/;
+const TOKEN_ID = /^(0|[1-9][0-9]*)$/;
+export function validateOfflineCandidateIdentity(value: unknown): value is OfflineCandidateIdentity {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.orderHash === "string" && ORDER_HASH.test(row.orderHash)
+    && row.chain === "gunzilla" && typeof row.contractAddress === "string" && ADDRESS.test(row.contractAddress)
+    && typeof row.tokenId === "string" && TOKEN_ID.test(row.tokenId)
+    && row.collectionSlug === "off-the-grid" && typeof row.protocolAddress === "string" && ADDRESS.test(row.protocolAddress);
+}
+
+function identityKey(identity: OfflineCandidateIdentity): string {
+  return `${identity.orderHash}\u0000${identity.chain}\u0000${identity.contractAddress}\u0000${identity.tokenId}\u0000${identity.collectionSlug}\u0000${identity.protocolAddress}`;
 }
 
 export function validateOfflineSweepManifest(manifest: OfflineSweepManifest): ManifestValidation {
@@ -264,9 +292,11 @@ export function classifyOfflineCandidates(input: {
   }
   const localKeys = new Set<string>();
   const localKeyCounts = new Map<string, number>();
+  const identityKeys = new Map<string, Set<string>>();
   for (const order of input.localOrders) {
     const key = text(order.orderHash) ? orderKey(order.orderHash) : "";
     localKeyCounts.set(key, (localKeyCounts.get(key) ?? 0) + 1);
+    if (validateOfflineCandidateIdentity(order.identity)) { const set = identityKeys.get(key) ?? new Set<string>(); set.add(identityKey(order.identity)); identityKeys.set(key, set); }
   }
   const output: OfflineOrderExplanation[] = [];
   for (const order of input.localOrders) {
@@ -274,6 +304,8 @@ export function classifyOfflineCandidates(input: {
     const events = input.journalEvents.filter((event) => event.orderHash !== null && orderKey(event.orderHash) === key).sort((a, b) => a.eventId.localeCompare(b.eventId));
     const reasons: OfflineReasonCode[] = [];
     if (!key || (localKeyCounts.get(key) ?? 0) > 1 || localKeys.has(key) || identityAmbiguity.has(key)) reasons.push("IDENTITY_AMBIGUOUS");
+    if (!validateOfflineCandidateIdentity(order.identity)) reasons.push("INVALID_LOCAL_IDENTITY");
+    if ((identityKeys.get(key)?.size ?? 0) > 1) reasons.push("IDENTITY_AMBIGUOUS");
     localKeys.add(key);
     if (!validation.eligible) reasons.push(...validation.reasons);
     if (order.status !== "active" || !order.isActive) reasons.push("ORDER_NOT_ACTIVE");
@@ -291,7 +323,8 @@ export function classifyOfflineCandidates(input: {
       seenInSweep,
       relevantJournalEventIds: events.map((event) => event.eventId).sort(),
       relevantEventSummary: events.map((event) => ({ eventId: event.eventId, eventType: event.eventType, eventTimestamp: event.eventTimestamp, eventVersion: event.eventVersion, receivedAt: event.receivedAt, processingStatus: event.processingStatus })),
-      authorityGranted: false
+      authorityGranted: false,
+      identity: deepFreeze({ ...order.identity })
     });
   }
   output.sort((a, b) => a.orderHash.localeCompare(b.orderHash));
@@ -345,6 +378,7 @@ export function validateOfflineCandidateBundle(value: unknown): OfflineCandidate
     if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash) || hash !== hash.toLowerCase()) reasons.push("INVALID_CANDIDATE_IDENTITY");
     else if (orderHashes.has(hash)) reasons.push("IDENTITY_AMBIGUOUS"); else orderHashes.add(hash);
     if (order.authorityGranted !== false) reasons.push("INVALID_CANDIDATE_AUTHORITY");
+    if (!Object.isFrozen(order.identity) || !validateOfflineCandidateIdentity(order.identity) || (order.identity as unknown as Record<string, unknown>).orderHash !== hash) reasons.push("INVALID_LOCAL_IDENTITY");
     if (order.classification !== "PRESENT" && order.classification !== "ABSENT_CANDIDATE" && order.classification !== "BLOCKED") reasons.push("INVALID_CANDIDATE_BUNDLE");
     else if (order.classification === "PRESENT") present += 1; else if (order.classification === "ABSENT_CANDIDATE") absent += 1; else blocked += 1;
     const orderReasons = order.reasons;

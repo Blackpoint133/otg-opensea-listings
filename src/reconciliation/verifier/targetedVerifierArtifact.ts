@@ -86,6 +86,7 @@ export function buildTargetedVerifierArtifact(input: BuildArtifactInput): Target
     collectionSlug: context.collectionSlug,
     contractAddress: context.contractAddress,
     protocolAddress: context.protocolAddress,
+    expectedIdentity: context.expectedIdentity,
     verificationStartedAt: input.startedAt,
     verificationCompletedAt: input.completedAt,
     providerObservedAt: provider.observedAt,

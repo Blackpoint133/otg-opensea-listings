@@ -75,6 +75,7 @@ function input(overrides: Partial<OfflineGenerationInput> = {}): OfflineGenerati
 function candidateBundle(classes: Array<"PRESENT" | "ABSENT_CANDIDATE" | "BLOCKED">, sweepId = "sweep-001") {
   const localOrders: OfflineLocalOrder[] = classes.map((classification, index) => ({
     orderHash: index === 0 ? HASH : index === 1 ? HASH_2 : HASH_3,
+    identity: { orderHash: index === 0 ? HASH : index === 1 ? HASH_2 : HASH_3, chain: "gunzilla", contractAddress: "0x9ed98e159be43a8d42b64053831fcae5e4d7d271", tokenId: String(index + 1), collectionSlug: "off-the-grid", protocolAddress: "0x0000000000000000000000000000000000000001" },
     status: classification === "BLOCKED" ? "sold" : "active",
     isActive: classification !== "BLOCKED",
     needsReconciliation: classification === "BLOCKED",

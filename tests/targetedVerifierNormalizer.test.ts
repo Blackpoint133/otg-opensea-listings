@@ -21,6 +21,7 @@ const CONTEXT: TargetedVerifierContext = deepFreeze({
   sweepId: "sweep-1", orderHash: HASH, candidateArtifactHash: "c".repeat(64), barrierArtifactHash: "d".repeat(64), generationRootHash: "e".repeat(64),
   candidateModelVersion: TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION, generationModelVersion: TARGETED_VERIFIER_GENERATION_MODEL_VERSION,
   chain: TARGETED_VERIFIER_SUPPORTED_CHAIN, collectionSlug: TARGETED_VERIFIER_SUPPORTED_COLLECTION, contractAddress: TARGETED_VERIFIER_SUPPORTED_CONTRACT, protocolAddress: PROTOCOL,
+  expectedIdentity: { orderHash: HASH, chain: TARGETED_VERIFIER_SUPPORTED_CHAIN, collectionSlug: TARGETED_VERIFIER_SUPPORTED_COLLECTION, contractAddress: TARGETED_VERIFIER_SUPPORTED_CONTRACT, protocolAddress: PROTOCOL, tokenId: "7" },
   candidateClassification: "ABSENT_CANDIDATE", targetedVerifierEligible: true, candidateAuthorityGranted: false, generationDeactivationAuthorityGranted: false,
   verifierSchemaVersion: TARGETED_VERIFIER_SCHEMA_VERSION, verifierPolicyVersion: TARGETED_VERIFIER_POLICY_VERSION, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, normalizerVersion: TARGETED_VERIFIER_NORMALIZER_VERSION,
   sourceProvenance: deepFreeze({ "snapshot.json": "f".repeat(64) }), preVerification: PRE

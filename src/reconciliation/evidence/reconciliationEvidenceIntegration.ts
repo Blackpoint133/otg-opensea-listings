@@ -3,7 +3,7 @@ import { CANONICALIZATION_VERSION, EVIDENCE_SCHEMA_VERSION, type ArtifactRef, ty
 import { OFFLINE_AUTHORITY_STATEMENT, OFFLINE_CANDIDATE_MODEL_VERSION, validateOfflineCandidateBundle } from "../offlineCandidateModel.js";
 import { OFFLINE_GENERATION_MODEL_VERSION, validateOfflineGenerationResult } from "../offlineGenerationBarrierModel.js";
 
-export const CANDIDATE_ENVELOPE_SCHEMA_VERSION = "candidate-bundle-envelope-v1" as const;
+export const CANDIDATE_ENVELOPE_SCHEMA_VERSION = "candidate-bundle-envelope-v2" as const;
 export const BARRIER_ENVELOPE_SCHEMA_VERSION = "barrier-evaluation-envelope-v1" as const;
 export const INTEGRATION_SEMANTIC_STATEMENT = "BARRIER PREREQUISITES ONLY. NO ORDER VERIFICATION. NO DEACTIVATION AUTHORITY." as const;
 
@@ -51,6 +51,11 @@ export interface IntegratedEvidenceResult {
   readonly reasons: readonly string[];
   readonly authorityGranted: false;
   readonly deactivationAuthorityGranted: false;
+}
+
+const VALID_RECONSTRUCTED = new WeakSet<object>();
+export function isTrustedReconstructedEvidence(value: unknown): value is IntegratedEvidenceResult {
+  return value !== null && typeof value === "object" && VALID_RECONSTRUCTED.has(value);
 }
 
 function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
@@ -120,6 +125,8 @@ export async function reconstructIntegratedEvidence(reader: GenerationEvidenceRe
     if (candidate.artifactType === "candidate-bundle" && barrier.artifactType === "barrier-evaluation" && barrier.fenceOutcome !== ((barrier.payload as Record<string, unknown>).finalFence as Record<string, unknown> | undefined)?.outcome) reasons.push("BARRIER_ENVELOPE_MISMATCH");
     if (validateOfflineCandidateBundle(candidate.payload).valid && validateOfflineGenerationResult(barrier.payload).valid && !candidateGenerationConsistent(candidate.payload, barrier.payload)) reasons.push("CANDIDATE_GENERATION_HANDOFF_MISMATCH");
     if (reasons.length > 0) return envelopeResult("MISMATCHED", reasons, graph.manifest, candidate, barrier, candidateRef, barrierRef);
-    return envelopeResult("VALID", [], graph.manifest, candidate, barrier, candidateRef, barrierRef);
+    const result = envelopeResult("VALID", [], graph.manifest, candidate, barrier, candidateRef, barrierRef);
+    VALID_RECONSTRUCTED.add(result);
+    return result;
   } catch (error) { return envelopeResult("CORRUPT", [error instanceof Error ? error.message : "INTEGRATION_PARSE_FAILED"], graph.manifest, null, null, candidateRef, barrierRef); }
 }

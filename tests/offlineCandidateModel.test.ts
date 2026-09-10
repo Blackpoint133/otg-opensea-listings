@@ -42,6 +42,7 @@ function manifest(overrides: Partial<OfflineSweepManifest> = {}): OfflineSweepMa
 function order(orderHash = HASH, overrides: Partial<OfflineLocalOrder> = {}): OfflineLocalOrder {
   return {
     orderHash,
+    identity: { orderHash, chain: "gunzilla", contractAddress: "0x9ed98e159be43a8d42b64053831fcae5e4d7d271", tokenId: "1", collectionSlug: "off-the-grid", protocolAddress: "0x0000000000000000000000000000000000000001" },
     status: "active",
     isActive: true,
     needsReconciliation: false,

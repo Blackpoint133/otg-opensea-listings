@@ -8,7 +8,7 @@ Gates executed in the Codex sandbox:
 
 - `npm run build`: PASS
 - `npm run typecheck`: PASS
-- `npm test`: PASS, 711 tests, 711 pass, 0 fail, 0 cancelled, 0 skipped; duration 8050.446 ms.
+- `npm test`: PASS, 714 tests, 714 pass, 0 fail, 0 cancelled, 0 skipped; duration 8050.446 ms.
 
 Source isolation audit: the adapter imports only hashing and pure local policy/evidence modules. No `node:http`, `node:https`, `fetch`, API-key access, PostgreSQL, SQL, Stream, worker, live canary or deactivation writer was introduced. `src/` remains offline-only.
 

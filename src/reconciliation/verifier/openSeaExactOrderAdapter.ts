@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { deepFreeze } from "../evidence/canonicalEvidence.js";
 import { OPENSEA_ORDER_CONTRACT_VERSION } from "./targetedVerifierTypes.js";
 import type { TargetedVerifierContext, TransportOutcome } from "./targetedVerifierTypes.js";
-import { isCanonicalAddress, isCanonicalOrderHash, isDecimal } from "./targetedVerifierPolicy.js";
+import { isCanonicalAddress, isCanonicalOrderHash, isCanonicalHash, isDecimal } from "./targetedVerifierPolicy.js";
 import { isTrustedTargetedVerifierContext } from "./targetedVerifierContext.js";
 
 export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v1-2026-09" as const;
@@ -13,7 +13,7 @@ export interface OpenSeaExactOrderRawInput {
   readonly body: Uint8Array | null;
   readonly responseBodySha256?: string | null;
   readonly rawResponseArtifactHash?: string | null;
-  readonly headers?: Readonly<Record<string, string | null>> | readonly { readonly name: string; readonly value: string }[];
+  readonly headers?: readonly { readonly name: string; readonly value: string }[];
   readonly requestStartedAt?: string;
   readonly responseHeadersAt?: string;
   readonly responseCompletedAt?: string;
@@ -51,17 +51,17 @@ export interface OpenSeaExactOrderObservationV1 {
 }
 
 const TRUSTED = new WeakSet<object>();
+const OBS_CONTEXT = new WeakMap<object, TargetedVerifierContext>();
 export function isTrustedOpenSeaExactOrderObservation(value: unknown): value is OpenSeaExactOrderObservationV1 { return value !== null && typeof value === "object" && TRUSTED.has(value); }
+export function isObservationBoundToContext(value: unknown, context: TargetedVerifierContext): boolean { return isTrustedOpenSeaExactOrderObservation(value) && OBS_CONTEXT.get(value) === context; }
 function hash(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 function headerValues(headers: OpenSeaExactOrderRawInput["headers"], name: string): string[] {
-  if (!headers) return [];
-  if (Array.isArray(headers)) return headers.filter((h) => h.name.toLowerCase() === name).map((h) => h.value);
-  const row = headers as Record<string, string | null>; const key = Object.keys(row).find((k) => k.toLowerCase() === name);
-  return key && row[key] !== null ? [row[key] as string] : [];
+  if (!headers || !Array.isArray(headers)) return [];
+  return headers.filter((h) => h.name.toLowerCase() === name).map((h) => h.value);
 }
 function failure(input: OpenSeaExactOrderRawInput, outcome: OpenSeaExactOrderObservationV1["outcome"], reasonCodes: string[], fields: Partial<OpenSeaExactOrderObservationV1> = {}): OpenSeaExactOrderObservationV1 {
   const result = deepFreeze({ adapterVersion: OPENSEA_EXACT_ORDER_ADAPTER_VERSION, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, requestIdentity: { method: "GET" as const, endpointPath: "/api/v2/orders/chain/{chain}/protocol/{protocol_address}/{order_hash}", chain: input.context.chain, protocolAddress: input.context.protocolAddress, orderHash: input.context.orderHash }, outcome, reasonCodes: [...new Set(reasonCodes)].sort(), providerStatus: null, orderHash: null, chain: null, protocolAddress: null, contractAddress: null, assetIdentifier: null, offerIdentifier: null, remainingQuantity: null, startTime: null, endTime: null, itemType: null, orderType: null, observedAt: null, observationLowerBound: null, observationUpperBound: null, responseBodySha256: input.body ? hash(input.body) : null, rawResponseArtifactHash: input.rawResponseArtifactHash ?? null, httpStatus: input.httpStatus, transportOutcome: input.transportOutcome ?? "HTTP", supportedListing: false, authorityGranted: false as const, deactivationAuthorityGranted: false as const, ...fields });
-  TRUSTED.add(result); return result;
+  if (isTrustedTargetedVerifierContext(input.context)) { TRUSTED.add(result); OBS_CONTEXT.set(result, input.context); } return result;
 }
 function duplicateKeys(json: string): boolean {
   const stack: Array<Set<string> | null> = []; let quote = false, esc = false, key = "", inKey = false;
@@ -76,7 +76,7 @@ export function adaptOpenSeaExactOrder(input: OpenSeaExactOrderRawInput): OpenSe
   const bytes = new Uint8Array(input.body); const actual = hash(bytes);
   if (bytes.byteLength > 1048576) return failure(input, "MALFORMED", ["BODY_TOO_LARGE"]);
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return failure(input, "MALFORMED", ["MALFORMED_JSON"]);
-  const headers = input.headers ?? {};
+  const headers = input.headers ?? [];
   const encodingValues = headerValues(headers, "content-encoding");
   if (encodingValues.length > 1 || encodingValues.some((v) => v.toLowerCase() !== "identity")) return failure(input, "UNSUPPORTED", ["UNSUPPORTED_CONTENT_ENCODING"]);
   if (headerValues(headers, "age").length > 0) return failure(input, "UNKNOWN", ["OBSERVATION_TIME_INVALID"]);
@@ -85,6 +85,7 @@ export function adaptOpenSeaExactOrder(input: OpenSeaExactOrderRawInput): OpenSe
   const lengths = headerValues(headers, "content-length");
   if (lengths.length > 1 || (lengths.length === 1 && (!isDecimal(lengths[0]) || BigInt(lengths[0]) > 1048576n || Number(lengths[0]) !== bytes.byteLength))) return failure(input, "MALFORMED", ["CONTENT_LENGTH_INVALID"]);
   if (input.responseBodySha256 !== undefined && input.responseBodySha256 !== null && input.responseBodySha256 !== actual) return failure(input, "MALFORMED", ["RAW_RESPONSE_HASH_MISMATCH"]);
+  if (input.rawResponseArtifactHash !== undefined && input.rawResponseArtifactHash !== null && !isCanonicalHash(input.rawResponseArtifactHash)) return failure(input, "MALFORMED", ["RAW_RESPONSE_ARTIFACT_HASH_INVALID"]);
   let text: string; let root: any;
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); if (text.charCodeAt(0) === 0xfeff || duplicateKeys(text)) return failure(input, "MALFORMED", ["MALFORMED_JSON"]); root = JSON.parse(text); } catch { return failure(input, "MALFORMED", ["MALFORMED_JSON"]); }
   if (input.httpStatus !== 200) return failure(input, input.httpStatus === 404 ? "UNKNOWN" : "UNSUPPORTED", [input.httpStatus === 404 ? "HTTP_404_NOT_STATE_PROOF" : `HTTP_${input.httpStatus ?? "STATUS"}`]);

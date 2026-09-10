@@ -43,7 +43,7 @@ function completeAttempt(active: ReturnType<typeof interpret>, fence: ReturnType
     verifierSchemaVersion: CONTEXT.verifierSchemaVersion, verifierPolicyVersion: CONTEXT.verifierPolicyVersion,
     providerContractVersion: CONTEXT.providerContractVersion, normalizerVersion: CONTEXT.normalizerVersion,
     requestIdentity: { method: "GET" as const, endpointPath: "/api/v2/orders/chain/{chain}/protocol/{protocol_address}/{order_hash}" as const, chain: CONTEXT.chain, protocolAddress: CONTEXT.protocolAddress, orderHash: CONTEXT.orderHash },
-    semanticEvidenceHash: "f".repeat(64), ...overrides
+    expectedIdentity: CONTEXT.expectedIdentity, semanticEvidenceHash: "f".repeat(64), ...overrides
   };
 }
 

@@ -159,7 +159,7 @@ export interface OfflineGenerationValidationResult {
 const TRANSPORT_RESULTS = new Set<string>(["COMPLETE", "PARTIAL", "FAILED", "UNSAFE"]);
 const GENERATION_STATES = new Set<string>(["OPEN", "TRANSPORT_COMPLETE", "CATCHING_UP", "VERIFIED", "ABORTED"]);
 const CANDIDATE_CLASSES = new Set<string>(["PRESENT", "ABSENT_CANDIDATE", "BLOCKED"]);
-const CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v1";
+const CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v2";
 const CANDIDATE_AUTHORITY_STATEMENT = "THIS OFFLINE MODEL DOES NOT AUTHORIZE DEACTIVATION.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -364,6 +364,8 @@ function candidateBundleFrozen(value: Record<string, unknown>): boolean {
   return value.orders.every((order) => {
     if (!isRecord(order) || !Object.isFrozen(order) || !Array.isArray(order.reasons) || !Array.isArray(order.relevantJournalEventIds) || !Array.isArray(order.relevantEventSummary) || !Object.isFrozen(order.reasons) || !Object.isFrozen(order.relevantJournalEventIds) || !Object.isFrozen(order.relevantEventSummary)) return false;
     if (!order.reasons.every((reason) => typeof reason === "string") || !order.relevantJournalEventIds.every((eventId) => nonEmptyText(eventId))) return false;
+    const identity = order.identity;
+    if (!isRecord(identity) || !Object.isFrozen(identity) || identity.chain !== "gunzilla" || identity.collectionSlug !== "off-the-grid" || typeof identity.contractAddress !== "string" || !/^0x[0-9a-f]{40}$/.test(identity.contractAddress) || typeof identity.protocolAddress !== "string" || !/^0x[0-9a-f]{40}$/.test(identity.protocolAddress) || typeof identity.tokenId !== "string" || !/^(0|[1-9][0-9]*)$/.test(identity.tokenId)) return false;
     return order.relevantEventSummary.every((summary) => isRecord(summary) && Object.isFrozen(summary) && nonEmptyText(summary.eventId) && (summary.eventType === null || nonEmptyText(summary.eventType)) && (summary.eventTimestamp === null || validIso(summary.eventTimestamp)) && (summary.eventVersion === null || nonEmptyText(summary.eventVersion)) && validIso(summary.receivedAt) && nonEmptyText(summary.processingStatus));
   });
 }
@@ -383,7 +385,9 @@ function validateCandidateBundle(value: unknown, sweepId: string): CandidateHand
   const entries: ValidatedCandidateEntry[] = value.orders.map((item): ValidatedCandidateEntry => {
     const invalidReasons: OfflineGenerationReasonCode[] = [];
     if (!isRecord(item)) return { orderHash: "<invalid>", sourceClassification: "BLOCKED", invalidReasons: ["INVALID_CANDIDATE_BUNDLE"] };
-    if (!validOrderHash(item.orderHash)) invalidReasons.push("INVALID_CANDIDATE_IDENTITY");
+    if (!validOrderHash(item.orderHash) || item.orderHash !== String(item.orderHash).toLowerCase()) invalidReasons.push("INVALID_CANDIDATE_IDENTITY");
+    const identity = item.identity;
+    if (!isRecord(identity) || identity.orderHash !== item.orderHash || identity.chain !== "gunzilla" || identity.collectionSlug !== "off-the-grid" || typeof identity.contractAddress !== "string" || !/^0x[0-9a-f]{40}$/.test(identity.contractAddress) || typeof identity.protocolAddress !== "string" || !/^0x[0-9a-f]{40}$/.test(identity.protocolAddress) || typeof identity.tokenId !== "string" || !/^(0|[1-9][0-9]*)$/.test(identity.tokenId)) invalidReasons.push("INVALID_CANDIDATE_IDENTITY");
     if (!isCandidateClass(item.classification)) invalidReasons.push("UNKNOWN_CANDIDATE_CLASSIFICATION");
     if (item.authorityGranted !== false) invalidReasons.push("INVALID_CANDIDATE_AUTHORITY");
     const sourceClassification = isCandidateClass(item.classification) ? item.classification : "BLOCKED";
@@ -392,6 +396,8 @@ function validateCandidateBundle(value: unknown, sweepId: string): CandidateHand
   const counts = new Map<string, number>();
   for (const entry of entries) if (entry.orderHash !== "<invalid>") counts.set(entry.orderHash, (counts.get(entry.orderHash) ?? 0) + 1);
   for (const entry of entries) if (entry.orderHash !== "<invalid>" && (counts.get(entry.orderHash) ?? 0) > 1) entry.invalidReasons.push("DUPLICATE_CANDIDATE_IDENTITY");
+  const conflicting = new Set(entries.filter((entry) => entry.invalidReasons.includes("INVALID_CANDIDATE_IDENTITY")).map((entry) => entry.orderHash));
+  for (const entry of entries) if (conflicting.has(entry.orderHash)) entry.invalidReasons.push("INVALID_CANDIDATE_IDENTITY");
   return { valid: globalReasons.length === 0, globalReasons: sortedReasons(globalReasons), entries };
 }
 

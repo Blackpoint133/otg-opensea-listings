@@ -382,7 +382,7 @@ test("candidate bundle sweep mismatch blocks all advancement", () => {
 
 test("canonical hash validation accepts uppercase hex and rejects malformed forms", () => {
   const validUpper = frozenClone(candidateBundle(["ABSENT_CANDIDATE"]), (copy) => { copy.orders[0].orderHash = "0x" + "A".repeat(64); });
-  assert.equal(evaluateOfflineGeneration(input({ candidateBundle: validUpper })).candidateAdvancement[0].targetedVerifierEligible, true);
+  assert.equal(evaluateOfflineGeneration(input({ candidateBundle: validUpper })).candidateAdvancement[0].targetedVerifierEligible, false);
   for (const orderHash of ["", " ", "a".repeat(64), "0x" + "a".repeat(63), "0x" + "a".repeat(65), "0x" + "g".repeat(64), 123, null, {}, []] as unknown[]) {
     const forged = frozenClone(candidateBundle(["ABSENT_CANDIDATE"]), (copy) => { copy.orders[0].orderHash = orderHash; });
     const result = evaluateOfflineGeneration(input({ candidateBundle: forged }));

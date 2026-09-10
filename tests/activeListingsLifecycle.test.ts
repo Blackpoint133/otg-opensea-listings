@@ -27,10 +27,10 @@ async function runChild(status: number): Promise<string> {
   const server = createServer({ key, cert: certificate }, (_request, response) => { response.writeHead(status, { "content-type": "application/json" }); response.end(status === 200 ? JSON.stringify({ listings: [], next: null }) : JSON.stringify({ error: "local_failure" })); });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address(); assert.ok(address && typeof address !== "string");
-  const sourceUrl = pathToFileURL(path.join(root, "src", "activeListings.ts")).href;
+  const sourceUrl = pathToFileURL(path.join(root, "src", process.env.CODEX_HERMETIC_TESTS ? "activeListings.js" : "activeListings.ts")).href;
   const childFile = path.join(directory, "child.mjs");
   await writeFile(childFile, `import { ActiveListingsClient, ACTIVE_LISTINGS_LOCAL_TEST_ENDPOINT } from ${JSON.stringify(sourceUrl)};\nconst client = new ActiveListingsClient({ apiKey: "local-test-only", retryPolicy: { maxRetries: 0 }, [ACTIVE_LISTINGS_LOCAL_TEST_ENDPOINT]: "https://127.0.0.1:${address.port}" });\ntry { await client.fetchSnapshot(); console.log("REQUEST_COMPLETED"); } finally { await client.close(); console.log("CLIENT_CLOSED"); }\nconsole.log("MAIN_RESOLVED");\n`, "utf8");
-  const child = spawn(process.execPath, ["--import", "tsx", childFile], { cwd: root, env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--experimental-strip-types", childFile], { cwd: root, env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", (chunk) => { output += String(chunk); });
   child.stderr.on("data", (chunk) => { output += String(chunk); });

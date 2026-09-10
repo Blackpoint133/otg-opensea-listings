@@ -140,7 +140,7 @@ export function validateNormalizedProviderOrder(value: unknown): value is Normal
 
 function epochValid(value: unknown): value is string { try { return isDecimal(value) && BigInt(value) > 0n && BigInt(value) < 8640000000000n; } catch { return false; } }
 
-const ATTEMPT_REQUIRED_FIELDS = ["attemptId", "responseBodySha256", "rawResponseArtifactHash", "normalizedProviderStatus", "providerResultStatus", "providerReasonCodes", "normalizedOrder", "resultStatus", "reasonCodes", "preVerificationWatermark", "postVerificationWatermark", "preRelevantFingerprint", "postRelevantFingerprint", "verifierSchemaVersion", "verifierPolicyVersion", "providerContractVersion", "normalizerVersion", "requestIdentity", "semanticEvidenceHash"] as const;
+const ATTEMPT_REQUIRED_FIELDS = ["attemptId", "responseBodySha256", "rawResponseArtifactHash", "normalizedProviderStatus", "providerResultStatus", "providerReasonCodes", "normalizedOrder", "resultStatus", "reasonCodes", "preVerificationWatermark", "postVerificationWatermark", "preRelevantFingerprint", "postRelevantFingerprint", "verifierSchemaVersion", "verifierPolicyVersion", "providerContractVersion", "normalizerVersion", "requestIdentity", "expectedIdentity", "semanticEvidenceHash"] as const;
 
 export function validateAttemptEvidence(value: unknown): value is AttemptEvidence {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -157,6 +157,8 @@ export function validateAttemptEvidence(value: unknown): value is AttemptEvidenc
   if (row.requestIdentity === null || typeof row.requestIdentity !== "object" || Array.isArray(row.requestIdentity)) return false;
   const request = row.requestIdentity as Record<string, unknown>;
   if (request.method !== "GET" || request.endpointPath !== TARGETED_VERIFIER_ENDPOINT_PATH || typeof request.chain !== "string" || !isCanonicalAddress(request.protocolAddress) || !isCanonicalOrderHash(request.orderHash)) return false;
+  const identity = row.expectedIdentity as Record<string, unknown>;
+  if (!Object.isFrozen(identity) || identity.orderHash !== request.orderHash || identity.chain !== request.chain || identity.protocolAddress !== request.protocolAddress || identity.collectionSlug !== TARGETED_VERIFIER_SUPPORTED_COLLECTION || identity.contractAddress !== TARGETED_VERIFIER_SUPPORTED_CONTRACT || !isCanonicalAddress(identity.contractAddress) || !isCanonicalAddress(identity.protocolAddress) || !isDecimal(identity.tokenId)) return false;
   return true;
 }
 

@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "node scripts/runHermeticTests.mjs",
+    "test:tsx": "tsx --test tests/*.test.ts",
     "probe:active-listings": "tsx scripts/runActiveListingsProbe.ts",
     "test:durable-inbox-pg": "tsx scripts/testDurableInboxPg.ts",
     "test:active-order-suppression-pg": "tsx scripts/testActiveOrderSuppressionPg.ts",

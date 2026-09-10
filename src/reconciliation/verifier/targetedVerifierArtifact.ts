@@ -1,5 +1,5 @@
 import { canonicalEvidence, deepFreeze, sha256Canonical } from "../evidence/canonicalEvidence.js";
-import { cloneOwned, cloneTargetedVerifierContext, isCanonicalHash, isIso, normalizeSafeHeaders, validateAttemptEvidence, validateJournalFenceSnapshot, validateTargetedVerifierEligibility, relevantFingerprintKey } from "./targetedVerifierPolicy.js";
+import { attemptIdentity, cloneOwned, cloneTargetedVerifierContext, isCanonicalHash, isIso, normalizeSafeHeaders, validateAttemptEvidence, validateJournalFenceSnapshot, validateTargetedVerifierEligibility, relevantFingerprintKey } from "./targetedVerifierPolicy.js";
 import { validateProviderResult } from "./targetedVerifierNormalizer.js";
 import { TARGETED_VERIFIER_ENDPOINT_PATH, type AttemptEvidence, type FenceResult, type JournalFenceSnapshot, type ProviderResult, type TargetedVerifierArtifact, type TargetedVerifierContext, type TransportOutcome } from "./targetedVerifierTypes.js";
 
@@ -120,7 +120,7 @@ export function sameAttemptEvidence(left: unknown, right: unknown): "IDEMPOTENT"
   return identity(left) === identity(right) ? "IDEMPOTENT" : "CONFLICT";
 }
 
-export function canonicalVerifierIdentity(context: TargetedVerifierContext, attemptNumber: number): string { return sha256Canonical({ sweepId: context.sweepId, orderHash: context.orderHash, verifierPolicyVersion: context.verifierPolicyVersion, providerContractVersion: context.providerContractVersion, endpointPath: TARGETED_VERIFIER_ENDPOINT_PATH, attemptNumber }); }
+export function canonicalVerifierIdentity(context: TargetedVerifierContext, attemptNumber: number): string { return attemptIdentity(context, attemptNumber); }
 
 export function providerResultIsAuthoritative(result: unknown): boolean {
   if (validateProviderResult(result)) return ["ACTIVE_CONFIRMED", "INACTIVE_CONFIRMED", "TERMINAL_CONFIRMED", "EXPIRED_CONFIRMED"].includes(result.status);

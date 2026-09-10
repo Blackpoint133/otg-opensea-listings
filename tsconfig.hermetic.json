@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "rootDir": ".", "outDir": ".codex-test-tmp", "sourceMap": false, "declaration": false, "noEmit": false },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", ".codex-test-tmp", "tests"]
+}

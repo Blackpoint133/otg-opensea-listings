@@ -198,7 +198,7 @@ export interface AttemptEvidence {
   readonly normalizerVersion: string;
   readonly requestIdentity: RequestIdentity;
   readonly semanticEvidenceHash: string;
-  readonly expectedIdentity?: Readonly<{ orderHash: string; chain: string; contractAddress: string; tokenId: string; collectionSlug: string; protocolAddress: string }>;
+  readonly expectedIdentity: Readonly<{ orderHash: string; chain: string; contractAddress: string; tokenId: string; collectionSlug: string; protocolAddress: string }>;
 }
 
 export type VerifierLifecycle = "NOT_STARTED" | "REQUEST_PENDING" | "RESPONSE_OBSERVED" | "PENDING_FENCE" | "COMPLETE" | "FAILED";

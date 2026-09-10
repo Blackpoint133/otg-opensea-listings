@@ -39,6 +39,7 @@ probe_result.json
 Thumbs.db
 desktop.ini
 *.tsbuildinfo
+.codex-test-tmp/
 # Empty local shell artifacts, not source files.
 /conflict
 /correct

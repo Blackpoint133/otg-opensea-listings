@@ -8,9 +8,10 @@ import { evaluateOfflineGeneration } from "../src/reconciliation/offlineGenerati
 import { createGenerationEvidenceWriter } from "../src/reconciliation/evidence/fileEvidenceStore.js";
 import { persistIntegratedEvidence, reconstructIntegratedEvidence } from "../src/reconciliation/evidence/reconciliationEvidenceIntegration.js";
 import { deriveTargetedVerifierContext, isTrustedTargetedVerifierContext } from "../src/reconciliation/verifier/targetedVerifierContext.js";
-import { applyJournalFence, buildAttemptEvidence, buildTargetedVerifierArtifact } from "../src/reconciliation/verifier/targetedVerifierArtifact.js";
-import { eventFingerprint, validateTargetedVerifierEligibility } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
-import { interpretTargetedOrderResponse } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
+import { applyJournalFence, buildAttemptEvidence, buildTargetedVerifierArtifact, validateFenceResult, validateAttemptEvidenceForContext } from "../src/reconciliation/verifier/targetedVerifierArtifact.js";
+import { eventFingerprint, validateTargetedVerifierEligibility, validateAttemptEvidence } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
+import { interpretTargetedOrderResponse, validateProviderResult } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
+import { canonicalEvidence } from "../src/reconciliation/evidence/canonicalEvidence.js";
 
 const CONTRACT = "0x9ed98e159be43a8d42b64053831fcae5e4d7d271";
 const PROTOCOL = "0x" + "1".repeat(40);
@@ -53,5 +54,29 @@ test("final artifact rejects cross-order provider/fence pair", async () => {
   try {
     const [a, b] = f.contexts; const pa = interpretTargetedOrderResponse({ context: a, httpStatus: 200, rawBody: body(HASH_A, "1"), observedAt: "2026-01-01T00:00:00.000Z" }); const pb = interpretTargetedOrderResponse({ context: b, httpStatus: 200, rawBody: body(HASH_B, "2"), observedAt: "2026-01-01T00:00:00.000Z" }); const fa = applyJournalFence(pa, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }); const fb = applyJournalFence(pb, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) }, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) });
     assert.throws(() => buildTargetedVerifierArtifact({ context: a, startedAt: START, completedAt: END, providerResult: pb, fenceResult: fb, transportOutcome: "HTTP", safeHeaders: {} }), /PROVIDER_CONTEXT_MISMATCH|FENCE_CONTEXT_ORDER_MISMATCH|FENCE_PROVIDER_MISMATCH/); assert.equal(validateTargetedVerifierEligibility(a).valid, true);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("same trusted context binds distinct provider semantic content", async () => {
+  const f = await makeContexts();
+  try {
+    const contextA = f.contexts[0];
+    const providerA1 = interpretTargetedOrderResponse({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "ACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
+    const providerA2 = interpretTargetedOrderResponse({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "INACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
+    assert.equal(validateProviderResult(providerA1), true); assert.equal(validateProviderResult(providerA2), true); assert.notEqual(canonicalEvidence(providerA1), canonicalEvidence(providerA2));
+    const pre = { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) };
+    const fenceA1 = applyJournalFence(providerA1, pre, pre), fenceA2 = applyJournalFence(providerA2, pre, pre);
+    assert.equal(validateFenceResult(fenceA1), true); assert.equal(validateFenceResult(fenceA2), true);
+    const attemptA1 = buildAttemptEvidence({ context: contextA, attemptNumber: 0, providerResult: providerA1, fenceResult: fenceA1 });
+    const attemptA2 = buildAttemptEvidence({ context: contextA, attemptNumber: 1, providerResult: providerA2, fenceResult: fenceA2 });
+    assert.equal(validateAttemptEvidence(attemptA1), true); assert.equal(validateAttemptEvidence(attemptA2), true);
+    assert.equal(validateAttemptEvidenceForContext(attemptA1, contextA), true); assert.equal(validateAttemptEvidenceForContext(attemptA2, contextA), true);
+    assert.notEqual(attemptA1.semanticEvidenceHash, attemptA2.semanticEvidenceHash);
+    assert.doesNotThrow(() => buildTargetedVerifierArtifact({ context: contextA, startedAt: START, completedAt: END, providerResult: providerA1, fenceResult: fenceA1, transportOutcome: "HTTP", safeHeaders: {} }));
+    assert.doesNotThrow(() => buildTargetedVerifierArtifact({ context: contextA, startedAt: START, completedAt: END, providerResult: providerA2, fenceResult: fenceA2, transportOutcome: "HTTP", safeHeaders: {} }));
+    assert.throws(() => buildAttemptEvidence({ context: contextA, attemptNumber: 2, providerResult: providerA1, fenceResult: fenceA2 }), /FENCE_PROVIDER_MISMATCH/);
+    assert.throws(() => buildAttemptEvidence({ context: contextA, attemptNumber: 3, providerResult: providerA2, fenceResult: fenceA1 }), /FENCE_PROVIDER_MISMATCH/);
+    assert.throws(() => buildTargetedVerifierArtifact({ context: contextA, startedAt: START, completedAt: END, providerResult: providerA1, fenceResult: fenceA2, transportOutcome: "HTTP", safeHeaders: {} }), /FENCE_PROVIDER_MISMATCH/);
+    assert.throws(() => buildTargetedVerifierArtifact({ context: contextA, startedAt: START, completedAt: END, providerResult: providerA2, fenceResult: fenceA1, transportOutcome: "HTTP", safeHeaders: {} }), /FENCE_PROVIDER_MISMATCH/);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });

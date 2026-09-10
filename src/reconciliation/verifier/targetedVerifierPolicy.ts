@@ -172,6 +172,9 @@ export function validateAttemptEvidence(value: unknown): value is AttemptEvidenc
   if (request.method !== "GET" || request.endpointPath !== TARGETED_VERIFIER_ENDPOINT_PATH || request.chain !== SUPPORTED_CHAIN || !isCanonicalAddress(request.protocolAddress) || !isCanonicalOrderHash(request.orderHash)) return false;
   const identity = row.expectedIdentity as Record<string, unknown>;
   if (identity === null || typeof identity !== "object" || identity.orderHash !== request.orderHash || identity.chain !== request.chain || identity.protocolAddress !== request.protocolAddress || identity.collectionSlug !== SUPPORTED_COLLECTION_SLUG || identity.contractAddress !== SUPPORTED_CONTRACT_ADDRESS || !isCanonicalAddress(identity.contractAddress) || !isCanonicalAddress(identity.protocolAddress) || !isDecimal(identity.tokenId)) return false;
+  const pre = row.preRelevantFingerprint as unknown as Record<string, unknown>;
+  const post = row.postRelevantFingerprint as unknown as Record<string, unknown>;
+  if (pre.orderHash !== request.orderHash || post.orderHash !== request.orderHash) return false;
   const expectedAttempt = sha256Bytes(new TextEncoder().encode(canonicalEvidence(canonicalAttemptMaterial(row as any))));
   if (row.attemptId !== expectedAttempt) return false;
   const expectedSemantic = sha256Bytes(new TextEncoder().encode(canonicalEvidence(semanticEvidenceMaterial(row))));

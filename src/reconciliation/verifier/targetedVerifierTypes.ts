@@ -1,7 +1,7 @@
 import { deepFreeze } from "../evidence/canonicalEvidence.js";
 
 export const TARGETED_VERIFIER_SCHEMA_VERSION = "targeted-verifier-schema-v4" as const;
-export const TARGETED_VERIFIER_POLICY_VERSION = "targeted-verifier-policy-v4" as const;
+export const TARGETED_VERIFIER_POLICY_VERSION = "targeted-verifier-policy-v5" as const;
 export const OPENSEA_ORDER_CONTRACT_VERSION = "opensea-get-order-v1-2026-05" as const;
 export const TARGETED_VERIFIER_NORMALIZER_VERSION = "targeted-verifier-normalizer-v1" as const;
 export const TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION = "active-listings-offline-candidate-v3" as const;

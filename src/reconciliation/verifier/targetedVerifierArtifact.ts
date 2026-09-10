@@ -64,7 +64,7 @@ export function buildTargetedVerifierArtifact(input: BuildArtifactInput): Target
   if (!isIso(input.startedAt) || !isIso(input.completedAt) || Date.parse(input.completedAt) < Date.parse(input.startedAt)) throw new Error("INVALID_VERIFICATION_TIME");
   if (!validateProviderResult(input.providerResult)) throw new Error("INVALID_PROVIDER_RESULT");
   if (!validateFenceResult(input.fenceResult)) throw new Error("INVALID_FENCE_RESULT");
-  if (canonicalEvidence(input.fenceResult.providerResult) !== canonicalEvidence(input.providerResult)) throw new Error("FENCE_PROVIDER_MISMATCH");
+  assertProviderFenceContext(input.providerResult, input.fenceResult, input.context);
   const normalized = input.providerResult.normalizedOrder;
   if (normalized !== null && (normalized.orderHash !== input.context.orderHash || normalized.chain !== input.context.chain || normalized.protocolAddress !== input.context.protocolAddress || normalized.contractAddress !== input.context.contractAddress)) throw new Error("PROVIDER_SCOPE_MISMATCH");
   if (input.rawResponseArtifactHash !== null && input.rawResponseArtifactHash !== undefined && !isCanonicalHash(input.rawResponseArtifactHash)) throw new Error("INVALID_RAW_RESPONSE_ARTIFACT_HASH");
@@ -149,10 +149,18 @@ export interface BuildAttemptEvidenceInput {
   readonly fenceResult: FenceResult;
 }
 
+function assertProviderFenceContext(providerResult: ProviderResult, fenceResult: FenceResult, context: TargetedVerifierContext): void {
+  if (canonicalEvidence(fenceResult.providerResult) !== canonicalEvidence(providerResult)) throw new Error("FENCE_PROVIDER_MISMATCH");
+  if (fenceResult.preVerification.relevantOrderFingerprint.orderHash !== context.orderHash || fenceResult.postVerification.relevantOrderFingerprint.orderHash !== context.orderHash) throw new Error("FENCE_CONTEXT_ORDER_MISMATCH");
+  const normalized = providerResult.normalizedOrder;
+  if (normalized !== null && (normalized.orderHash !== context.orderHash || normalized.chain !== context.chain || normalized.protocolAddress !== context.protocolAddress || normalized.contractAddress !== context.contractAddress)) throw new Error("PROVIDER_CONTEXT_MISMATCH");
+}
+
 export function buildAttemptEvidence(input: BuildAttemptEvidenceInput): AttemptEvidence {
   if (!isTrustedTargetedVerifierContext(input.context)) throw new Error("UNTRUSTED_TARGETED_VERIFIER_CONTEXT");
   if (!Number.isSafeInteger(input.attemptNumber) || input.attemptNumber < 0 || !validateProviderResult(input.providerResult) || !validateFenceResult(input.fenceResult)) throw new Error("INVALID_ATTEMPT_INPUT");
   const context = input.context;
+  assertProviderFenceContext(input.providerResult, input.fenceResult, context);
   const requestIdentity = { method: "GET" as const, endpointPath: TARGETED_VERIFIER_ENDPOINT_PATH, chain: context.chain, protocolAddress: context.protocolAddress, orderHash: context.orderHash };
   const row: Record<string, unknown> = {
     attemptNumber: input.attemptNumber, sweepId: context.sweepId, candidateArtifactHash: context.candidateArtifactHash, barrierArtifactHash: context.barrierArtifactHash, generationRootHash: context.generationRootHash, candidateModelVersion: context.candidateModelVersion, generationModelVersion: context.generationModelVersion,
@@ -160,7 +168,9 @@ export function buildAttemptEvidence(input: BuildAttemptEvidenceInput): AttemptE
   };
   row.attemptId = attemptIdentity(context, input.attemptNumber);
   row.semanticEvidenceHash = sha256Canonical(semanticEvidenceMaterial(row));
-  return deepFreeze(row) as unknown as AttemptEvidence;
+  const result = deepFreeze(row) as unknown as AttemptEvidence;
+  if (!validateAttemptEvidence(result) || !validateAttemptEvidenceForContext(result, context)) throw new Error("INVALID_BUILT_ATTEMPT_EVIDENCE");
+  return result;
 }
 
 export function canonicalVerifierIdentity(context: TargetedVerifierContext, attemptNumber: number): string { return attemptIdentity(context, attemptNumber); }

@@ -12,5 +12,4 @@ test("barrier commitment changes id",()=>assert.notEqual(attemptIdentity(context
 test("root commitment changes id",()=>assert.notEqual(attemptIdentity(context,0),attemptIdentity({...context,generationRootHash:"d".repeat(64)} as any,0)));
 test("wire identity excludes token",()=>assert.equal(context.orderHash,(context.expectedIdentity as any).orderHash));
 test("schema v4 is explicit",()=>assert.match(TARGETED_VERIFIER_SCHEMA_VERSION,/v4$/));
-test("policy v4 is explicit",()=>assert.match(TARGETED_VERIFIER_POLICY_VERSION,/v4$/));
-for (let i=0;i<18;i++) test(`attempt canonical vector ${i}`,()=>assert.equal(attemptIdentity(context,i),attemptIdentity(context,i)));
+test("policy v5 is explicit",()=>assert.match(TARGETED_VERIFIER_POLICY_VERSION,/v5$/));

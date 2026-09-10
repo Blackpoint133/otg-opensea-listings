@@ -1,5 +1,6 @@
 import { canonicalEvidence, deepFreeze, sha256Canonical } from "../evidence/canonicalEvidence.js";
-import { attemptIdentity, cloneOwned, cloneTargetedVerifierContext, isCanonicalHash, isIso, normalizeSafeHeaders, validateAttemptEvidence, validateJournalFenceSnapshot, validateTargetedVerifierEligibility, relevantFingerprintKey } from "./targetedVerifierPolicy.js";
+import { attemptIdentity, canonicalAttemptMaterial, semanticEvidenceMaterial, cloneOwned, cloneTargetedVerifierContext, isCanonicalHash, isIso, normalizeSafeHeaders, validateAttemptEvidence, validateJournalFenceSnapshot, validateTargetedVerifierEligibility, relevantFingerprintKey } from "./targetedVerifierPolicy.js";
+import { isTrustedTargetedVerifierContext } from "./targetedVerifierContext.js";
 import { validateProviderResult } from "./targetedVerifierNormalizer.js";
 import { TARGETED_VERIFIER_ENDPOINT_PATH, type AttemptEvidence, type FenceResult, type JournalFenceSnapshot, type ProviderResult, type TargetedVerifierArtifact, type TargetedVerifierContext, type TransportOutcome } from "./targetedVerifierTypes.js";
 
@@ -113,11 +114,41 @@ export function buildTargetedVerifierArtifact(input: BuildArtifactInput): Target
 
 export function verifierArtifactHash(artifact: TargetedVerifierArtifact): string { return sha256Canonical(artifact); }
 export function sameAttemptEvidence(left: unknown, right: unknown): "IDEMPOTENT" | "CONFLICT" | "INCOMPLETE" {
-  const validLeft = validateAttemptEvidence(left), validRight = validateAttemptEvidence(right);
+  const shape = (v: any) => v && typeof v === "object" && isCanonicalHash(v.attemptId) && Array.isArray(v.reasonCodes) && typeof v.resultStatus === "string";
+  const validLeft = shape(left), validRight = shape(right);
   if (!validLeft || !validRight) return "INCOMPLETE";
-  if (left.attemptId !== right.attemptId) return "CONFLICT";
+  const l = left as AttemptEvidence, r = right as AttemptEvidence;
+  if (l.attemptId !== r.attemptId) return "CONFLICT";
   const identity = (value: AttemptEvidence) => sha256Canonical(value);
-  return identity(left) === identity(right) ? "IDEMPOTENT" : "CONFLICT";
+  return identity(l) === identity(r) ? "IDEMPOTENT" : "CONFLICT";
+}
+
+export function validateAttemptEvidenceForContext(value: unknown, context: TargetedVerifierContext): boolean {
+  if (!isTrustedTargetedVerifierContext(context) || !validateAttemptEvidence(value)) return false;
+  const row = value as AttemptEvidence;
+  const request = { method: "GET" as const, endpointPath: TARGETED_VERIFIER_ENDPOINT_PATH, chain: context.chain, protocolAddress: context.protocolAddress, orderHash: context.orderHash };
+  return row.sweepId === context.sweepId && row.candidateArtifactHash === context.candidateArtifactHash && row.barrierArtifactHash === context.barrierArtifactHash && row.generationRootHash === context.generationRootHash && row.candidateModelVersion === context.candidateModelVersion && row.generationModelVersion === context.generationModelVersion && row.verifierSchemaVersion === context.verifierSchemaVersion && row.verifierPolicyVersion === context.verifierPolicyVersion && row.providerContractVersion === context.providerContractVersion && row.normalizerVersion === context.normalizerVersion && canonicalEvidence(row.requestIdentity) === canonicalEvidence(request) && canonicalEvidence(row.expectedIdentity) === canonicalEvidence(context.expectedIdentity);
+}
+
+export interface BuildAttemptEvidenceInput {
+  readonly context: TargetedVerifierContext;
+  readonly attemptNumber: number;
+  readonly providerResult: ProviderResult;
+  readonly fenceResult: FenceResult;
+}
+
+export function buildAttemptEvidence(input: BuildAttemptEvidenceInput): AttemptEvidence {
+  if (!isTrustedTargetedVerifierContext(input.context)) throw new Error("UNTRUSTED_TARGETED_VERIFIER_CONTEXT");
+  if (!Number.isSafeInteger(input.attemptNumber) || input.attemptNumber < 0 || !validateProviderResult(input.providerResult) || !validateFenceResult(input.fenceResult)) throw new Error("INVALID_ATTEMPT_INPUT");
+  const context = input.context;
+  const requestIdentity = { method: "GET" as const, endpointPath: TARGETED_VERIFIER_ENDPOINT_PATH, chain: context.chain, protocolAddress: context.protocolAddress, orderHash: context.orderHash };
+  const row: Record<string, unknown> = {
+    attemptNumber: input.attemptNumber, sweepId: context.sweepId, candidateArtifactHash: context.candidateArtifactHash, barrierArtifactHash: context.barrierArtifactHash, generationRootHash: context.generationRootHash, candidateModelVersion: context.candidateModelVersion, generationModelVersion: context.generationModelVersion,
+    attemptId: "", responseBodySha256: input.providerResult.responseBodySha256, rawResponseArtifactHash: input.providerResult.rawResponseArtifactHash, normalizedProviderStatus: input.providerResult.providerStatus, providerResultStatus: input.providerResult.status, providerReasonCodes: sorted(input.providerResult.reasonCodes), normalizedOrder: cloneOwned(input.providerResult.normalizedOrder), resultStatus: input.fenceResult.status, reasonCodes: sorted(input.fenceResult.reasonCodes), preVerificationWatermark: cloneOwned(input.fenceResult.preVerification.watermark), postVerificationWatermark: cloneOwned(input.fenceResult.postVerification.watermark), preRelevantFingerprint: cloneOwned(input.fenceResult.preVerification.relevantOrderFingerprint), postRelevantFingerprint: cloneOwned(input.fenceResult.postVerification.relevantOrderFingerprint), verifierSchemaVersion: context.verifierSchemaVersion, verifierPolicyVersion: context.verifierPolicyVersion, providerContractVersion: context.providerContractVersion, normalizerVersion: context.normalizerVersion, requestIdentity, expectedIdentity: cloneOwned(context.expectedIdentity), semanticEvidenceHash: ""
+  };
+  row.attemptId = attemptIdentity(context, input.attemptNumber);
+  row.semanticEvidenceHash = sha256Canonical(semanticEvidenceMaterial(row));
+  return deepFreeze(row) as unknown as AttemptEvidence;
 }
 
 export function canonicalVerifierIdentity(context: TargetedVerifierContext, attemptNumber: number): string { return attemptIdentity(context, attemptNumber); }

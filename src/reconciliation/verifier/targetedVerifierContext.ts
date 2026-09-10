@@ -5,6 +5,8 @@ import { validateTargetedVerifierEligibility } from "./targetedVerifierPolicy.js
 import { OPENSEA_ORDER_CONTRACT_VERSION, TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION, TARGETED_VERIFIER_GENERATION_MODEL_VERSION, TARGETED_VERIFIER_NORMALIZER_VERSION, TARGETED_VERIFIER_POLICY_VERSION, TARGETED_VERIFIER_SCHEMA_VERSION, type JournalFenceSnapshot, type TargetedVerifierContext } from "./targetedVerifierTypes.js";
 
 export interface TargetedVerifierContextMetadata { readonly preVerification: JournalFenceSnapshot; }
+const TRUSTED_CONTEXTS = new WeakSet<object>();
+export function isTrustedTargetedVerifierContext(value: unknown): value is TargetedVerifierContext { return value !== null && typeof value === "object" && TRUSTED_CONTEXTS.has(value); }
 
 export function deriveTargetedVerifierContext(evidence: IntegratedEvidenceResult, orderHash: string, metadata: TargetedVerifierContextMetadata): TargetedVerifierContext {
   if (!isTrustedReconstructedEvidence(evidence) || evidence.status !== "VALID" || !evidence.candidate || !evidence.barrier || !evidence.candidateRef || !evidence.barrierRef) throw new Error("UNTRUSTED_INTEGRATED_EVIDENCE");
@@ -23,5 +25,6 @@ export function deriveTargetedVerifierContext(evidence: IntegratedEvidenceResult
   const context = deepFreeze({ sweepId: String(payload.sweepId), orderHash, candidateArtifactHash: evidence.candidateRef.contentHash, barrierArtifactHash: evidence.barrierRef.contentHash, generationRootHash: evidence.manifest.rootContentHash, candidateModelVersion: TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION, generationModelVersion: TARGETED_VERIFIER_GENERATION_MODEL_VERSION, chain: identity.chain, collectionSlug: identity.collectionSlug, contractAddress: identity.contractAddress, protocolAddress: identity.protocolAddress, expectedIdentity: { ...identity }, candidateClassification: "ABSENT_CANDIDATE" as const, targetedVerifierEligible: true, candidateAuthorityGranted: false as const, generationDeactivationAuthorityGranted: false as const, verifierSchemaVersion: TARGETED_VERIFIER_SCHEMA_VERSION, verifierPolicyVersion: TARGETED_VERIFIER_POLICY_VERSION, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, normalizerVersion: TARGETED_VERIFIER_NORMALIZER_VERSION, sourceProvenance: evidence.manifest.sourceProvenance, preVerification: metadata.preVerification });
   const eligibility = validateTargetedVerifierEligibility(context);
   if (!eligibility.valid) throw new Error(`VERIFIER_NOT_ELIGIBLE:${eligibility.reasons.join(",")}`);
+  TRUSTED_CONTEXTS.add(context);
   return context;
 }

@@ -141,12 +141,22 @@ export function validateNormalizedProviderOrder(value: unknown): value is Normal
 
 function epochValid(value: unknown): value is string { try { return isDecimal(value) && BigInt(value) > 0n && BigInt(value) < 8640000000000n; } catch { return false; } }
 
-const ATTEMPT_REQUIRED_FIELDS = ["attemptId", "responseBodySha256", "rawResponseArtifactHash", "normalizedProviderStatus", "providerResultStatus", "providerReasonCodes", "normalizedOrder", "resultStatus", "reasonCodes", "preVerificationWatermark", "postVerificationWatermark", "preRelevantFingerprint", "postRelevantFingerprint", "verifierSchemaVersion", "verifierPolicyVersion", "providerContractVersion", "normalizerVersion", "requestIdentity", "expectedIdentity", "semanticEvidenceHash"] as const;
+const ATTEMPT_REQUIRED_FIELDS = ["attemptNumber", "sweepId", "candidateArtifactHash", "barrierArtifactHash", "generationRootHash", "candidateModelVersion", "generationModelVersion", "attemptId", "responseBodySha256", "rawResponseArtifactHash", "normalizedProviderStatus", "providerResultStatus", "providerReasonCodes", "normalizedOrder", "resultStatus", "reasonCodes", "preVerificationWatermark", "postVerificationWatermark", "preRelevantFingerprint", "postRelevantFingerprint", "verifierSchemaVersion", "verifierPolicyVersion", "providerContractVersion", "normalizerVersion", "requestIdentity", "expectedIdentity", "semanticEvidenceHash"] as const;
+
+export function canonicalAttemptMaterial(value: { readonly sweepId: string; readonly candidateArtifactHash: string; readonly barrierArtifactHash: string; readonly generationRootHash: string; readonly candidateModelVersion: string; readonly generationModelVersion: string; readonly verifierSchemaVersion: string; readonly verifierPolicyVersion: string; readonly providerContractVersion: string; readonly normalizerVersion: string; readonly requestIdentity: unknown; readonly expectedIdentity: unknown; readonly attemptNumber: number }): unknown {
+  return { sweepId: value.sweepId, candidateArtifactHash: value.candidateArtifactHash, barrierArtifactHash: value.barrierArtifactHash, generationRootHash: value.generationRootHash, candidateModelVersion: value.candidateModelVersion, generationModelVersion: value.generationModelVersion, verifierSchemaVersion: value.verifierSchemaVersion, verifierPolicyVersion: value.verifierPolicyVersion, providerContractVersion: value.providerContractVersion, normalizerVersion: value.normalizerVersion, requestIdentity: value.requestIdentity, expectedIdentity: value.expectedIdentity, attemptNumber: value.attemptNumber };
+}
+
+export function semanticEvidenceMaterial(value: Record<string, unknown>): unknown {
+  const copy = { ...value }; delete copy.semanticEvidenceHash; delete copy.attemptId;
+  return copy;
+}
 
 export function validateAttemptEvidence(value: unknown): value is AttemptEvidence {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   if (!ATTEMPT_REQUIRED_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(row, field))) return false;
+  if (!Number.isSafeInteger(row.attemptNumber) || (row.attemptNumber as number) < 0 || typeof row.sweepId !== "string" || !isCanonicalHash(row.candidateArtifactHash) || !isCanonicalHash(row.barrierArtifactHash) || !isCanonicalHash(row.generationRootHash) || row.candidateModelVersion !== TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION || row.generationModelVersion !== TARGETED_VERIFIER_GENERATION_MODEL_VERSION || row.verifierSchemaVersion !== TARGETED_VERIFIER_SCHEMA_VERSION || row.verifierPolicyVersion !== TARGETED_VERIFIER_POLICY_VERSION || row.providerContractVersion !== OPENSEA_ORDER_CONTRACT_VERSION || row.normalizerVersion !== TARGETED_VERIFIER_NORMALIZER_VERSION) return false;
   if (!isCanonicalHash(row.attemptId) || row.responseBodySha256 !== null && !isCanonicalHash(row.responseBodySha256) || row.rawResponseArtifactHash !== null && !isCanonicalHash(row.rawResponseArtifactHash) || !isCanonicalHash(row.semanticEvidenceHash)) return false;
   if (typeof row.verifierSchemaVersion !== "string" || row.verifierSchemaVersion.length === 0 || typeof row.verifierPolicyVersion !== "string" || row.verifierPolicyVersion.length === 0 || typeof row.providerContractVersion !== "string" || row.providerContractVersion.length === 0 || typeof row.normalizerVersion !== "string" || row.normalizerVersion.length === 0) return false;
   if (!Array.isArray(row.providerReasonCodes) || !Array.isArray(row.reasonCodes) || !row.providerReasonCodes.every((reason) => typeof reason === "string" && RESULT_REASONS.has(reason)) || !row.reasonCodes.every((reason) => typeof reason === "string" && RESULT_REASONS.has(reason))) return false;
@@ -160,7 +170,10 @@ export function validateAttemptEvidence(value: unknown): value is AttemptEvidenc
   if (request.method !== "GET" || request.endpointPath !== TARGETED_VERIFIER_ENDPOINT_PATH || request.chain !== SUPPORTED_CHAIN || !isCanonicalAddress(request.protocolAddress) || !isCanonicalOrderHash(request.orderHash)) return false;
   const identity = row.expectedIdentity as Record<string, unknown>;
   if (!Object.isFrozen(identity) || identity.orderHash !== request.orderHash || identity.chain !== request.chain || identity.protocolAddress !== request.protocolAddress || identity.collectionSlug !== SUPPORTED_COLLECTION_SLUG || identity.contractAddress !== SUPPORTED_CONTRACT_ADDRESS || !isCanonicalAddress(identity.contractAddress) || !isCanonicalAddress(identity.protocolAddress) || !isDecimal(identity.tokenId)) return false;
-  return true;
+  const expectedAttempt = sha256Bytes(new TextEncoder().encode(canonicalEvidence(canonicalAttemptMaterial(row as any))));
+  if (row.attemptId !== expectedAttempt) return false;
+  const expectedSemantic = sha256Bytes(new TextEncoder().encode(canonicalEvidence(semanticEvidenceMaterial(row))));
+  return row.semanticEvidenceHash === expectedSemantic;
 }
 
 export function retryMetadataFor(status: number | null, outcome: "HTTP" | "TIMEOUT" | "CONNECTION_RESET"): { retryable: boolean; retryReason: string; recommendedPolicyClass: "NONE" | "RATE_LIMITED" | "TRANSIENT_TRANSPORT" } {
@@ -172,7 +185,7 @@ export function retryMetadataFor(status: number | null, outcome: "HTTP" | "TIMEO
 
 export function attemptIdentity(context: TargetedVerifierContext, attemptNumber: number): string {
   if (!Number.isSafeInteger(attemptNumber) || attemptNumber < 0) throw new Error("INVALID_ATTEMPT_NUMBER");
-  return sha256Bytes(new TextEncoder().encode(canonicalEvidence({ sweepId: context.sweepId, orderHash: context.orderHash, expectedIdentity: context.expectedIdentity, verifierPolicyVersion: context.verifierPolicyVersion, providerContractVersion: context.providerContractVersion, endpointPath: TARGETED_VERIFIER_ENDPOINT_PATH, attemptNumber })));
+  return sha256Bytes(new TextEncoder().encode(canonicalEvidence(canonicalAttemptMaterial({ ...context, requestIdentity: canonicalRequestIdentity(context), attemptNumber }))));
 }
 
 export function relevantFingerprintKey(value: RelevantOrderFingerprint): string { return canonicalEvidence(value); }

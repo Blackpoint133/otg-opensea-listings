@@ -35,3 +35,9 @@ After completing a task:
 
 Keep production TLS verification enabled. Generate test keys at runtime; never
 embed reusable private keys. Preserve required test fixtures and schema migrations.
+
+This repository uses repository-local SSH authentication from `.git/config`.
+Never replace it with a plaintext PAT, and never read or print private-key contents
+or place them in reports. If authentication fails, fail closed instead of weakening
+SSH, TLS, or sandbox protections. Completed tasks may commit and push `main` when
+the user task authorizes it.

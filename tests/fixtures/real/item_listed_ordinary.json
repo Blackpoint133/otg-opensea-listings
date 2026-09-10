@@ -1,0 +1,98 @@
+{
+  "event_type": "item_listed",
+  "version": 1,
+  "sent_at": "2026-08-04T23:29:22.884000Z",
+  "payload": {
+    "base_price": "16000000000000000000000",
+    "chain": "gunzilla",
+    "collection": {
+      "slug": "off-the-grid"
+    },
+    "event_timestamp": "2026-08-04T23:29:22.578000Z",
+    "expiration_date": "2027-01-31T23:29:20.000000Z",
+    "is_private": false,
+    "item": {
+      "nft_id": "gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/6394148",
+      "permalink": "https://opensea.io/item/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/6394148",
+      "chain": {
+        "name": "gunzilla"
+      },
+      "metadata": {
+        "name": "Vulture Solana",
+        "description": null,
+        "background_color": null,
+        "image_url": "https://i2c.seadn.io/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/f1fcbf934ba064e2b365f8bb21a354/fdf1fcbf934ba064e2b365f8bb21a354.png",
+        "animation_url": null,
+        "metadata_url": null,
+        "traits": null
+      }
+    },
+    "listing_date": "2026-08-04T23:29:20.000000Z",
+    "listing_type": null,
+    "maker": {
+      "address": "0xc9dfaeaae3cc3b48bf3d5592044d3edb01e3e2ff"
+    },
+    "order_hash": "0xfcbac149c380568c692e1dd3f3e3a6c4308c27995b6a43c78d30bf4dc896f9fb",
+    "payment_token": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "eth_price": "0.0241653804220022688",
+      "name": "GUN",
+      "symbol": "GUN",
+      "usd_price": "45.21536"
+    },
+    "protocol_address": "0x00000000006687982678b03100b9bdc8be440814",
+    "protocol_data": {
+      "parameters": {
+        "offerer": "0xc9dfaeaae3cc3b48bf3d5592044d3edb01e3e2ff",
+        "offer": [
+          {
+            "itemType": 2,
+            "token": "0x9ed98e159be43a8d42b64053831fcae5e4d7d271",
+            "identifierOrCriteria": "6394148",
+            "startAmount": "1",
+            "endAmount": "1"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "15040000000000000000000",
+            "endAmount": "15040000000000000000000",
+            "recipient": "0xc9dfaeaae3cc3b48bf3d5592044d3edb01e3e2ff"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "160000000000000000000",
+            "endAmount": "160000000000000000000",
+            "recipient": "0xd9f68d28e451a83affdb7c71cc2c20552555b07f"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "800000000000000000000",
+            "endAmount": "800000000000000000000",
+            "recipient": "0xd52238c6f3144c854635428401d39d724ef76dc9"
+          }
+        ],
+        "startTime": "1785886160",
+        "endTime": "1801438160",
+        "orderType": 0,
+        "zone": "0x0000000000000000000000000000000000000000",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "27855337018906766782546881864045825683096516384821792734248037958226750603676",
+        "conduitKey": "0x86d26897267711ea4b173c8c124a0a73612001da35562f1ee3b26929b6575e89",
+        "totalOriginalConsiderationItems": 3,
+        "counter": "0x0"
+      },
+      "signature": "0x81fc254c4079cf28df8de1032842aae8db2035933b5265626e85e83221e39405a6c5a78e3f08c8b324928abf927bacc1a6e4de2e0f45e99924811e1882577c78000000bbfb2bfd76c46e18f74541debcca90bf737d7e83d4e6ca13f7bfba69a6a5ee24ccf394ffa7e26b17aea9af85fd51257971dc0af3f61d9cf4d0ade0fc25902576"
+    },
+    "quantity": 1,
+    "taker": null
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "opensea-listings-v2-stream-probe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "probe:active-listings": "tsx scripts/runActiveListingsProbe.ts",
+    "test:durable-inbox-pg": "tsx scripts/testDurableInboxPg.ts",
+    "test:active-order-suppression-pg": "tsx scripts/testActiveOrderSuppressionPg.ts",
+    "observe:active-order-canary-candidate": "tsx scripts/observeActiveOrderCanaryCandidate.ts",
+    "precanary": "npm run build",
+    "canary": "node dist/canary/runLiveCanary.js",
+    "precanary:durable": "npm run build",
+    "canary:durable": "node dist/canary/runDurableCanary.js",
+    "precanary:rest-txa-only": "npm run build",
+    "canary:rest-txa-only": "node dist/canary/runRestTxaOnlyCanary.js",
+    "precanary:rest-txb-single-event": "npm run build",
+    "canary:rest-txb-single-event": "node dist/canary/runRestTxbSingleEventCanary.js",
+    "precanary:rest-txb-multi-event": "npm run build",
+    "canary:rest-txb-multi-event": "node dist/canary/runRestTxbMultiEventCanary.js",
+    "precanary:rest-txb-multi-event-84-86": "npm run build",
+    "canary:rest-txb-multi-event-84-86": "node dist/canary/runRestTxbMultiEvent8486Canary.js",
+    "probe": "node dist/probe/runRestContractProbe.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@opensea/stream-js": "0.4.0",
+    "dotenv": "^16.4.7",
+    "node-localstorage": "^3.0.5",
+    "pg": "^8.23.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/pg": "^8.21.0",
+    "@types/ws": "^8.5.13",
+    "selfsigned": "5.5.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "event_type": "item_sold",
+  "version": 1785890722000,
+  "sent_at": "2026-08-05T00:45:23.691000Z",
+  "payload": {
+    "chain": "gunzilla",
+    "closing_date": "2026-08-05T00:45:22.000000Z",
+    "collection": {
+      "slug": "off-the-grid"
+    },
+    "event_timestamp": "2026-08-05T00:45:22.000000Z",
+    "is_private": false,
+    "item": {
+      "nft_id": "gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/716194",
+      "permalink": "https://opensea.io/item/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/716194",
+      "chain": {
+        "name": "gunzilla"
+      },
+      "metadata": {
+        "name": "Ninja Set",
+        "description": null,
+        "background_color": null,
+        "image_url": "https://i2c.seadn.io/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/2dc645d9f0863dcd5dc0bbac6eab0b/112dc645d9f0863dcd5dc0bbac6eab0b.png",
+        "animation_url": null,
+        "metadata_url": null,
+        "traits": null
+      }
+    },
+    "listing_type": null,
+    "maker": {
+      "address": "0xbe1820baf57fdcc729986718a29568dc3746bc3d"
+    },
+    "order_hash": "0xfe4b836194d614d9c4b1caa9b2d1c43c8e85dd167eb4aa0861e26de945af9c52",
+    "payment_token": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "eth_price": "0.0000015043654430562926",
+      "name": "GUN",
+      "symbol": "GUN",
+      "usd_price": "0.00280683"
+    },
+    "protocol_address": "0x00000000006687982678b03100b9bdc8be440814",
+    "protocol_data": {
+      "parameters": {
+        "offerer": "0xbe1820baf57fdcc729986718a29568dc3746bc3d",
+        "offer": [
+          {
+            "itemType": 2,
+            "token": "0x9ed98e159be43a8d42b64053831fcae5e4d7d271",
+            "identifierOrCriteria": "716194",
+            "startAmount": "1",
+            "endAmount": "1"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "940000000000000000000",
+            "endAmount": "940000000000000000000",
+            "recipient": "0xbe1820baf57fdcc729986718a29568dc3746bc3d"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "10000000000000000000",
+            "endAmount": "10000000000000000000",
+            "recipient": "0xd9f68d28e451a83affdb7c71cc2c20552555b07f"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "50000000000000000000",
+            "endAmount": "50000000000000000000",
+            "recipient": "0xd52238c6f3144c854635428401d39d724ef76dc9"
+          }
+        ],
+        "startTime": "1774530137",
+        "endTime": "1790082137",
+        "orderType": 0,
+        "zone": "0x0000000000000000000000000000000000000000",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "27855337018906766782546881864045825683096516384821792734247357438336813218831",
+        "conduitKey": "0x86d26897267711ea4b173c8c124a0a73612001da35562f1ee3b26929b6575e89",
+        "totalOriginalConsiderationItems": 3,
+        "counter": "0x0"
+      },
+      "signature": "0xbf322313ea854e8afbcecba2dc9d18f6a82aa063df7c3839662d0acba37bf5f3f1b94a3b0a67bc1d060ee9ff734efe3c3efed75ffb02aeec6773e6a438b9b01100000458ca86747ec9639bb473c783d6f4df76954a8e50caf8bb45a628c2ae9af01d40a678804dcdc55bcca8e080e7c8bac944b4aec585209855ece789d2d34962b22af6a14cb3a946aa9c4fc32629c0de548016b161174be8607d91e76f276e08fa28"
+    },
+    "quantity": 1,
+    "sale_price": "1000000000000000000000",
+    "taker": {
+      "address": "0xd450b3f9f26561504ad72d46b3d339f7cdbb682b"
+    },
+    "transaction": {
+      "hash": "0x4b9d077a0cf5a76ef39374f5ae8af2f7e5370e3983b87a3b49284b2ab36d261d",
+      "timestamp": "1785890722"
+    }
+  }
+}

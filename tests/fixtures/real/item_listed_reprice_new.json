@@ -1,0 +1,98 @@
+{
+  "event_type": "item_listed",
+  "version": 1,
+  "sent_at": "2026-08-05T04:16:41.592000Z",
+  "payload": {
+    "base_price": "28888000000000000000000",
+    "chain": "gunzilla",
+    "collection": {
+      "slug": "off-the-grid"
+    },
+    "event_timestamp": "2026-08-05T04:16:40.899000Z",
+    "expiration_date": "2026-11-03T04:16:37.000000Z",
+    "is_private": false,
+    "item": {
+      "nft_id": "gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/2932754",
+      "permalink": "https://opensea.io/item/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/2932754",
+      "chain": {
+        "name": "gunzilla"
+      },
+      "metadata": {
+        "name": "Pioneer Trainers",
+        "description": null,
+        "background_color": null,
+        "image_url": "https://i2c.seadn.io/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/1a2d0514f85d2fbd16775e07b1c2d7/281a2d0514f85d2fbd16775e07b1c2d7.png",
+        "animation_url": null,
+        "metadata_url": null,
+        "traits": null
+      }
+    },
+    "listing_date": "2026-08-05T04:16:37.000000Z",
+    "listing_type": null,
+    "maker": {
+      "address": "0x74f627b7607728c668633df9677eabdaa257509f"
+    },
+    "order_hash": "0x77d484b689fccde0524dd1fb1fbcc74fbc2a1b7fbeafc78771d25924e24bf91c",
+    "payment_token": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "eth_price": "0.0433923411576062725824",
+      "name": "GUN",
+      "symbol": "GUN",
+      "usd_price": "80.91413248"
+    },
+    "protocol_address": "0x00000000006687982678b03100b9bdc8be440814",
+    "protocol_data": {
+      "parameters": {
+        "offerer": "0x74f627b7607728c668633df9677eabdaa257509f",
+        "offer": [
+          {
+            "itemType": 2,
+            "token": "0x9ed98e159be43a8d42b64053831fcae5e4d7d271",
+            "identifierOrCriteria": "2932754",
+            "startAmount": "1",
+            "endAmount": "1"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "27154720000000000000000",
+            "endAmount": "27154720000000000000000",
+            "recipient": "0x74f627b7607728c668633df9677eabdaa257509f"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "288880000000000000000",
+            "endAmount": "288880000000000000000",
+            "recipient": "0xd9f68d28e451a83affdb7c71cc2c20552555b07f"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "1444400000000000000000",
+            "endAmount": "1444400000000000000000",
+            "recipient": "0xd52238c6f3144c854635428401d39d724ef76dc9"
+          }
+        ],
+        "startTime": "1785903397",
+        "endTime": "1793679397",
+        "orderType": 0,
+        "zone": "0x0000000000000000000000000000000000000000",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "27855337018906766782546881864045825683096516384821792734234645583224248212973",
+        "conduitKey": "0x86d26897267711ea4b173c8c124a0a73612001da35562f1ee3b26929b6575e89",
+        "totalOriginalConsiderationItems": 3,
+        "counter": "0x0"
+      },
+      "signature": "0xc71ab39af2abbde52bf71fc05436e030f3a947ab41dca374af47305f462b330240f4fa14f6d2de29f65e4b133f01083ebccebfb9f471e6bbdf9e10ea7b8f9d210000017f0b1a7bbc32e053f0c95d11c902438f10106ca9019c228c06b604cb365ef4ae"
+    },
+    "quantity": 1,
+    "taker": null
+  }
+}

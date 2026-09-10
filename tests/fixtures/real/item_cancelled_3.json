@@ -1,0 +1,49 @@
+{
+  "event_type": "item_cancelled",
+  "version": 4,
+  "sent_at": "2026-08-05T02:00:36.595000Z",
+  "payload": {
+    "base_price": "29000000000000000000000",
+    "chain": "gunzilla",
+    "collection": {
+      "slug": "off-the-grid"
+    },
+    "event_timestamp": "2026-08-05T02:00:36.565000Z",
+    "expiration_date": "2026-09-13T03:59:13.000000Z",
+    "is_private": false,
+    "listing_date": "2026-06-15T03:59:13.000000Z",
+    "listing_type": null,
+    "maker": {
+      "address": "0x54d60b3a0454ba338d6656850b036ffad9983ee8"
+    },
+    "order_hash": "0x8f0fb8d3c069945e89bb15c04eee282b9f7991d16c90508a014e205c6403468a",
+    "payment_token": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "eth_price": "0.043466997563686097",
+      "name": "GUN",
+      "symbol": "GUN",
+      "usd_price": "81.35631"
+    },
+    "protocol_address": "0x00000000006687982678b03100b9bdc8be440814",
+    "quantity": 1,
+    "taker": null,
+    "transaction": null,
+    "item": {
+      "nft_id": "gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/4844479",
+      "permalink": "https://opensea.io/item/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/4844479",
+      "chain": {
+        "name": "gunzilla"
+      },
+      "metadata": {
+        "name": "#4844479",
+        "description": null,
+        "background_color": null,
+        "image_url": null,
+        "animation_url": null,
+        "metadata_url": null,
+        "traits": null
+      }
+    }
+  }
+}

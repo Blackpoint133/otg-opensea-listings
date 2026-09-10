@@ -1,0 +1,39 @@
+{
+  "event_type": "item_transferred",
+  "version": 1785810084000,
+  "sent_at": "2026-08-04T02:21:24.872000Z",
+  "payload": {
+    "chain": "gunzilla",
+    "collection": {
+      "slug": "off-the-grid"
+    },
+    "event_timestamp": "2026-08-04T02:21:24.000000Z",
+    "from_account": {
+      "address": "0x0000000000000000000000000000000000000000"
+    },
+    "item": {
+      "nft_id": "gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/47710247",
+      "permalink": "https://opensea.io/item/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/47710247",
+      "chain": {
+        "name": "gunzilla"
+      },
+      "metadata": {
+        "name": "#47710247",
+        "description": null,
+        "background_color": null,
+        "image_url": null,
+        "animation_url": null,
+        "metadata_url": null,
+        "traits": null
+      }
+    },
+    "quantity": 1,
+    "to_account": {
+      "address": "0xc39231f7b87a3de87310f1e3b6391f89924b7f1a"
+    },
+    "transaction": {
+      "hash": "0x7fc1f843675e674beb95bc074365850e8e93290b5f59764ccb4bfe84fa8a4450",
+      "timestamp": "1785810084"
+    }
+  }
+}

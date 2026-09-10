@@ -1,0 +1,39 @@
+{
+  "event_type": "item_transferred",
+  "version": 1785810086000,
+  "sent_at": "2026-08-04T02:21:27.243000Z",
+  "payload": {
+    "chain": "gunzilla",
+    "collection": {
+      "slug": "off-the-grid"
+    },
+    "event_timestamp": "2026-08-04T02:21:26.000000Z",
+    "from_account": {
+      "address": "0x0d151b58d67dfd1c80635af4d4183b1977ee6f8f"
+    },
+    "item": {
+      "nft_id": "gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/14463248",
+      "permalink": "https://opensea.io/item/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/14463248",
+      "chain": {
+        "name": "gunzilla"
+      },
+      "metadata": {
+        "name": "Optimist Skin for the Partisan",
+        "description": null,
+        "background_color": null,
+        "image_url": "https://i2c.seadn.io/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/df1caef36189a2376a606ecd838739/f1df1caef36189a2376a606ecd838739.png",
+        "animation_url": null,
+        "metadata_url": null,
+        "traits": null
+      }
+    },
+    "quantity": 1,
+    "to_account": {
+      "address": "0x59b8bfc9204de79417dd17b30308b5eef84a77e4"
+    },
+    "transaction": {
+      "hash": "0x5fa8437fd51d85d5c4527b58632f87543d2b8e3856125d3689968ae80ee004a0",
+      "timestamp": "1785810086"
+    }
+  }
+}

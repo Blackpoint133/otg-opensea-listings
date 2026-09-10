@@ -1,0 +1,103 @@
+{
+  "event_type": "item_sold",
+  "version": 1785901025000,
+  "sent_at": "2026-08-05T03:37:06.710000Z",
+  "payload": {
+    "chain": "gunzilla",
+    "closing_date": "2026-08-05T03:37:05.000000Z",
+    "collection": {
+      "slug": "off-the-grid"
+    },
+    "event_timestamp": "2026-08-05T03:37:05.000000Z",
+    "is_private": false,
+    "item": {
+      "nft_id": "gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/13161307",
+      "permalink": "https://opensea.io/item/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/13161307",
+      "chain": {
+        "name": "gunzilla"
+      },
+      "metadata": {
+        "name": "Sackrifice",
+        "description": null,
+        "background_color": null,
+        "image_url": "https://i2c.seadn.io/gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/f317138fafadc002c5ab7135d4f46b/6df317138fafadc002c5ab7135d4f46b.png",
+        "animation_url": null,
+        "metadata_url": null,
+        "traits": null
+      }
+    },
+    "listing_type": null,
+    "maker": {
+      "address": "0x9dde3fea8fcb468c7b4dfaa33624a4c1d07419cc"
+    },
+    "order_hash": "0xd9228ecbb9c77275c2074459af64a10d93e5caf882f67b5f6003f0af3486c524",
+    "payment_token": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "eth_price": "0.000001498082585586407",
+      "name": "GUN",
+      "symbol": "GUN",
+      "usd_price": "0.00279316"
+    },
+    "protocol_address": "0x00000000006687982678b03100b9bdc8be440814",
+    "protocol_data": {
+      "parameters": {
+        "offerer": "0x9dde3fea8fcb468c7b4dfaa33624a4c1d07419cc",
+        "offer": [
+          {
+            "itemType": 2,
+            "token": "0x9ed98e159be43a8d42b64053831fcae5e4d7d271",
+            "identifierOrCriteria": "13161307",
+            "startAmount": "1",
+            "endAmount": "1"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "11280000000000000000000",
+            "endAmount": "11280000000000000000000",
+            "recipient": "0x9dde3fea8fcb468c7b4dfaa33624a4c1d07419cc"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "120000000000000000000",
+            "endAmount": "120000000000000000000",
+            "recipient": "0xd9f68d28e451a83affdb7c71cc2c20552555b07f"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "600000000000000000000",
+            "endAmount": "600000000000000000000",
+            "recipient": "0xd52238c6f3144c854635428401d39d724ef76dc9"
+          }
+        ],
+        "startTime": "1783569379",
+        "endTime": "1799121379",
+        "orderType": 0,
+        "zone": "0x0000000000000000000000000000000000000000",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "27855337018906766782546881864045825683096516384821792734235468150323731603340",
+        "conduitKey": "0x86d26897267711ea4b173c8c124a0a73612001da35562f1ee3b26929b6575e89",
+        "totalOriginalConsiderationItems": 3,
+        "counter": "0x0"
+      },
+      "signature": "0x28551fbba41bfb712ecdfb457ca992be50ef618e13a2a17208283a2da8d6f6a60fc761a8a0e9b19071cc21b69f0e7ca38eb9ec43557e28fd27c9fc5c5a0fc29700000315b0fe6221871d882ddfd42ac7faa3b34f3edccf264d0385830f8dbcbd14c9ece8f7405291d937c4913a8d461a9f0fdd55c0f673fbfefc50a0d215e986725445a8f48cca258dc0bf6ba435f4b239bc8073492afed6f5f87f967a4f2a47cfe5c8f880cb2511760cd37e91f5451fb39f9e35f2b413162f0141758a6e4d557427a9"
+    },
+    "quantity": 1,
+    "sale_price": "12000000000000000000000",
+    "taker": {
+      "address": "0xf65167fcbccfd59b07d5cd7d518c9a989e52fae5"
+    },
+    "transaction": {
+      "hash": "0x771429775d70e47c99fb477f9eaa76f5d1394922e530af9c66cd6128e68c57ce",
+      "timestamp": "1785901025"
+    }
+  }
+}

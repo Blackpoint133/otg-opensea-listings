@@ -1,0 +1,53 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  MULTI_REST_TXB_CONFIRMATIONS,
+  MULTI_REST_TXB_EXPECTED,
+  MULTI_REST_TXB_EXPECTED_APPLY_RESULT,
+  MULTI_REST_TXB_ORDERED_IDS,
+  MULTI_REST_TXB_TARGET_IDS,
+  canonicalizeMultiRestTxbNftTimestamp,
+  loadRestTxbMultiEventConfig,
+  mapMultiRestTxbNftRow,
+  runRestTxbMultiEventCanary,
+  validateMultiRestTxbEventSuccess,
+  type MultiRestTxbSnapshot
+} from "../src/canary/restTxbMultiEvent8486Canary.js";
+import type { DbPool, PendingInboxApplyResult, QueryResult, TransactionClient } from "../src/db/types.js";
+
+type TargetId = "84" | "86";
+const flags = [...MULTI_REST_TXB_CONFIRMATIONS];
+
+class FakePool implements DbPool {
+  async connect(): Promise<TransactionClient> { throw new Error("real pool connection is forbidden in tests"); }
+  async end(): Promise<void> {}
+  async query<Row = unknown>(text: string): Promise<QueryResult<Row>> {
+    if (text.includes("current_database")) return { rows: [{ database: "server_otg" }] as Row[], rowCount: 1 };
+    if (text.includes("to_regclass")) return { rows: [{ ok: true }] as Row[], rowCount: 1 };
+    throw new Error(`unexpected test query: ${text}`);
+  }
+}
+
+function tempDir(): string { return path.join(os.tmpdir(), `otg-rest-txb-8486-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`); }
+function raw(id: TargetId): any { const e = MULTI_REST_TXB_EXPECTED[id]; return { event_type: "item_transferred", payload: { event_timestamp: e.eventTimestamp, transaction: { hash: e.transactionHash, timestamp: e.eventTimestamp }, item: { nft_id: `gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/${e.tokenId}` }, from_account: { address: "0x0000000000000000000000000000000000000000" }, to_account: { address: e.canonicalTo }, rest_backfill_source: { source: "opensea_rest_events_backfill", transfer_type: "mint" } } }; }
+function target(id: TargetId, applied: boolean, errors: string[] = []): any { const e = MULTI_REST_TXB_EXPECTED[id]; return { event: { eventId: id, eventType: "item_transferred", eventTimestamp: e.eventTimestamp, eventVersion: null, chain: "gunzilla", contractAddress: "0x9ed98e159be43a8d42b64053831fcae5e4d7d271", tokenId: e.tokenId, transactionHash: e.transactionHash, dedupeKey: e.dedupeKey, rawPayload: raw(id), processingStatus: applied ? "reconciliation_required" : "pending", attemptCount: applied ? 1 : 0, nextRetryAt: null, applyResult: applied ? MULTI_REST_TXB_EXPECTED_APPLY_RESULT : null, appliedAt: applied ? "2026-08-15T15:00:00.000Z" : null, processingStartedAt: null, lastErrorCode: null, lastErrorMessage: null, restSource: "opensea_rest_events_backfill", rawTransferType: "mint", canonicalFrom: "0x0000000000000000000000000000000000000000", canonicalTo: e.canonicalTo }, nftState: applied ? { chain: "gunzilla", contractAddress: "0x9ed98e159be43a8d42b64053831fcae5e4d7d271", tokenId: e.tokenId, nftId: `gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/${e.tokenId}`, collectionSlug: "off-the-grid", currentOwnerAddress: e.canonicalTo, lastTransferFromAddress: "0x0000000000000000000000000000000000000000", lastTransferToAddress: e.canonicalTo, lastTransferTransactionHash: e.transactionHash, lastTransferAt: e.eventTimestamp, lastNftEventTimestamp: e.eventTimestamp, lastNftEventVersion: null } : null, activeOrders: [], attempts: [], dedupeRows: [{ eventId: id, processingStatus: applied ? "reconciliation_required" : "pending", dedupeKey: e.dedupeKey }], sameSecondCandidates: [], classification: { eventId: id, dedupeKey: e.dedupeKey, classification: applied ? "DUPLICATE_EXISTING" : "SAFE", reason: applied ? "existing_non_pending_lifecycle" : "no_same_second_distinct_transaction" }, validationErrors: errors }; }
+function snapshot(state: Set<string>, ids: readonly string[], errors: Record<string, string[]> = {}): MultiRestTxbSnapshot { const targets = Object.fromEntries(ids.map((id) => [id, target(id as TargetId, state.has(id), errors[id] ?? [])])); return { counts: { database: "server_otg", journal: 67, pending: 17 - state.size, processing: 0, failed: 0, reconciliationRequired: 50 + state.size, unfinalized: 17 - state.size, attemptLedger: 0, nftState: 50 + state.size, orders: 0 }, targets, candidateCoverageComplete: true, protectedBoundarySeconds: ["2026-08-13T10:55:44.000Z", "2026-08-13T10:55:45.000Z"], releaseEvidence: { window: { after: 1786618485, before: 1786618545 }, queryEventTypes: ["transfer"], files: [], combinedSha256: "a".repeat(64), transportComplete: true, semanticCoverageComplete: true, txAAdmissionComplete: true, candidateCoverageComplete: true, releaseEligible: true, event82Classification: "SAFE" }, validationErrors: [] }; }
+function config() { const outputDir = tempDir(); return { outputDir, config: loadRestTxbMultiEventConfig([...flags, "--event-ids", "84,86", "--output-dir", outputDir]) }; }
+function provenance(): any { return { packageVersion: "0.1.0", nodeVersion: "v-test", sourceFiles: [], sourceCombinedSha256: "a".repeat(64), runtimeFiles: [], runtimeCombinedSha256: "b".repeat(64) }; }
+async function runFake(options: { snapshot?: (state: Set<string>, ids: readonly string[]) => MultiRestTxbSnapshot; appendEvent?: (dir: string, value: any) => Promise<void>; apply?: (id: string, state: Set<string>) => Promise<PendingInboxApplyResult> } = {}) {
+  const { outputDir, config: canaryConfig } = config(); const state = new Set<string>(); const calls: string[] = [];
+  try { const result = await runRestTxbMultiEventCanary(canaryConfig, { pool: new FakePool(), computeProvenance: provenance, acquireRuntimeGuard: async () => ({ release: async () => {} }), collectSnapshot: async (_pool, ids) => (options.snapshot ?? ((s, requested) => snapshot(s, requested)))(state, ids), applyEvent: async (_pool, id) => { calls.push(id); if (options.apply) return options.apply(id, state); state.add(id); return { outcome: "reconciliation_required", eventId: id, eventType: "item_transferred", dedupeKey: MULTI_REST_TXB_EXPECTED[id as TargetId].dedupeKey, processingStatus: "reconciliation_required", attemptCount: 1, applyResult: MULTI_REST_TXB_EXPECTED_APPLY_RESULT }; }, appendEvent: options.appendEvent }); return { result, calls, outputDir }; } finally { fs.rmSync(outputDir, { recursive: true, force: true }); }
+}
+
+test("new canary accepts only hard-pinned 84,86 and orders 86 before 84", () => { const { outputDir, config: canaryConfig } = config(); try { assert.deepEqual(canaryConfig.eventIds, MULTI_REST_TXB_TARGET_IDS); assert.deepEqual(MULTI_REST_TXB_ORDERED_IDS, ["86", "84"]); } finally { fs.rmSync(outputDir, { recursive: true, force: true }); } });
+for (const bad of ["86,84", "84", "86", "84,85", "82", "85", "84,86,87", "84,84", "84-86"]) test(`new canary rejects target ${bad}`, () => { const dir = tempDir(); fs.mkdirSync(dir, { recursive: true }); try { assert.throws(() => loadRestTxbMultiEventConfig([...flags, "--event-ids", bad, "--output-dir", dir])); } finally { fs.rmSync(dir, { recursive: true, force: true }); } });
+test("clean run executes exactly 86 then 84 and completes", async () => { const result = await runFake(); assert.deepEqual(result.calls, ["86", "84"]); assert.equal(result.result.result, "MULTI_REST_TXB_COMPLETE"); assert.deepEqual(result.result.committedEventIds, ["86", "84"]); assert.equal(result.result.txBCallCount, 2); });
+test("whole-plan non-SAFE failure makes zero Tx B calls", async () => { const result = await runFake({ snapshot: (_state, ids) => snapshot(new Set(), ids, ids.includes("84") ? { "84": ["nft_state_exists"] } : {}) }); assert.deepEqual(result.calls, []); assert.equal(result.result.result, "MULTI_REST_TXB_ABORTED_PREFLIGHT"); });
+test("second fresh revalidation stops before 84 and preserves 86 prefix", async () => { const result = await runFake({ snapshot: (state, ids) => state.has("86") && ids.includes("84") ? snapshot(state, ids, { "84": ["active_orders_exist"] }) : snapshot(state, ids) }); assert.deepEqual(result.calls, ["86"]); assert.deepEqual(result.result.committedEventIds, ["86"]); assert.equal(result.result.result, "MULTI_REST_TXB_PARTIAL"); });
+test("actual PostgreSQL timestamp shape maps and validates without mismatch", () => { const e = MULTI_REST_TXB_EXPECTED["86"]; const mapped = mapMultiRestTxbNftRow({ chain: "gunzilla", contract_address: "0x9ed98e159be43a8d42b64053831fcae5e4d7d271", token_id: e.tokenId, nft_id: `gunzilla/0x9ed98e159be43a8d42b64053831fcae5e4d7d271/${e.tokenId}`, collection_slug: "off-the-grid", current_owner_address: e.canonicalTo, last_transfer_from_address: "0x0000000000000000000000000000000000000000", last_transfer_to_address: e.canonicalTo, last_transfer_transaction_hash: e.transactionHash, last_transfer_at: "2026-08-13 03:55:39-07", last_nft_event_timestamp: "2026-08-13 03:55:39-07", last_nft_event_version: null }); assert.equal(mapped.lastTransferAt, e.eventTimestamp); assert.equal(mapped.lastNftEventTimestamp, e.eventTimestamp); const before = snapshot(new Set(), ["86"]); const after = snapshot(new Set(["86"]), ["86"]); after.targets["86"].nftState = mapped; const result = validateMultiRestTxbEventSuccess(before, after, { outcome: "reconciliation_required", eventId: "86", eventType: "item_transferred", dedupeKey: e.dedupeKey, processingStatus: "reconciliation_required", attemptCount: 1, applyResult: MULTI_REST_TXB_EXPECTED_APPLY_RESULT }, "86"); assert.equal(result.includes("nft_final_state_mismatch"), false); });
+test("timestamp canonicalization remains strict and fails closed", () => { assert.equal(canonicalizeMultiRestTxbNftTimestamp("2026-08-13 03:55:39.123456-07"), "2026-08-13T10:55:39.123456Z"); assert.equal(canonicalizeMultiRestTxbNftTimestamp("2026-08-13 03:55:39"), null); assert.equal(canonicalizeMultiRestTxbNftTimestamp("nonsense"), null); });
+test("first event JSONL failure preserves committed 86 and does not call 84", async () => { const result = await runFake({ appendEvent: async (_dir, value) => { if (value.eventId === "86") throw new Error("jsonl failure"); } }); assert.deepEqual(result.calls, ["86"]); assert.deepEqual(result.result.committedEventIds, ["86"]); assert.deepEqual(result.result.unattemptedEventIds, ["84"]); assert.equal(result.result.result, "MULTI_REST_TXB_PARTIAL"); });
+test("new source has no old canary or dynamic target path", () => { const source = fs.readFileSync(path.join(import.meta.dirname, "../src/canary/restTxbMultiEvent8486Canary.ts"), "utf8"); assert.doesNotMatch(source, /restTxbMultiEventCanary\.js|eventIds !== "84,85"|selectNextDuePendingInboxEvent|persistRawEventToInbox|OpenSea|Stream/); assert.match(source, /\["84", "86"\]/); });

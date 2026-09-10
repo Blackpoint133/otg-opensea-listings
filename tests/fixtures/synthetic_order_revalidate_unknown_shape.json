@@ -1,0 +1,7 @@
+{
+  "event_type": "order_revalidate",
+  "version": 7,
+  "payload": {
+    "order_hash": "0xsynthetic-order-revalidate"
+  }
+}

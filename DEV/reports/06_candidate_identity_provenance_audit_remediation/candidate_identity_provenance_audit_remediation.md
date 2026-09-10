@@ -8,7 +8,7 @@
 
 - HIGH-01: введён общий `src/reconciliation/identityScope.ts`; контракт, chain и collection теперь проверяются единообразно, а неподдержанный синтаксически корректный contract получает BLOCKED/`UNSUPPORTED_LOCAL_SCOPE` на candidate boundary. Неверный orderHash в identity также блокируется.
 - HIGH-02: изменены версии candidate model/envelope, generation model и barrier envelope; старые и смешанные durable графы fail-closed.
-- HIGH-03: verifier scope теперь требует `gunzilla` на request identity; expected identity обязана совпадать с поддерживаемым scope и request. Попытки с произвольным chain/contract не становятся валидным verifier evidence.
+- HIGH-03: verifier scope теперь требует `gunzilla` на request identity; expected identity обязана совпадать с поддерживаемым scope и request. Полный отдельный context-bound builder/recomputation semanticEvidenceHash ещё не добавлен; это остаётся HIGH для следующего remediation шага.
 - MEDIUM-01: candidate и generation используют общий pure identity contract.
 - MEDIUM-02: обязательные fixture/sql копии больше не подавляют ошибки; child-process runner обрабатывает `error` и разрешает promise ровно один раз.
 - MEDIUM-03: добавлен отдельный набор исполняемых adversarial assertions для scope, canonical token и duplicate independence.
@@ -19,5 +19,4 @@
 
 ## Security boundary
 
-Response adapter и HTTP transport не реализованы. Live/API key, DB, mutation и deactivation authority не использовались; `authorityGranted` и `deactivationAuthorityGranted` остаются false.
-
+Response adapter и HTTP transport не реализованы. Live/API key, DB, mutation и deactivation authority не использовались; `authorityGranted` и `deactivationAuthorityGranted` остаются false. Остаток: HIGH-03 (durable AttemptEvidence context binding) требует отдельного исправления.

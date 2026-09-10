@@ -8,6 +8,8 @@
 
 Hermetic runner hardened: required fixture/sql copy failures propagate, child spawn errors are nonzero, explicit compiled test enumeration and cleanup remain enabled. No generated test JavaScript remains after run.
 
+Ограничение: отдельный durable context-bound AttemptEvidence builder и полная recomputation semanticEvidenceHash в этой итерации не реализованы; HIGH-03 остаётся открытым.
+
 PURE RESPONSE ADAPTER NOT IMPLEMENTED
 HTTP TRANSPORT NOT IMPLEMENTED
 LIVE/API KEY NOT USED

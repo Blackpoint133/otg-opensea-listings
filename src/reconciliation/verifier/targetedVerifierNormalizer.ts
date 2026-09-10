@@ -4,6 +4,7 @@ import {
   isKnownProviderStatus, normalizeSafeHeaders, retryMetadataFor, validateNormalizedProviderOrder, validateRetryMetadata, validateTargetedVerifierEligibility, cloneOwned
 } from "./targetedVerifierPolicy.js";
 import type { NormalizedProviderOrder, ProviderResult, ProviderStatus, RetryMetadata, SafeHeaders, TargetedVerifierContext, TransportOutcome } from "./targetedVerifierTypes.js";
+import { isTrustedOpenSeaExactOrderObservation, type OpenSeaExactOrderObservationV1 } from "./openSeaExactOrderAdapter.js";
 
 const RUNTIME_PROVIDER_PROOF = new WeakSet<object>();
 const RESULT_STATUSES = new Set(["VERIFIER_NOT_ELIGIBLE", "ACTIVE_CONFIRMED", "INACTIVE_CONFIRMED", "TERMINAL_CONFIRMED", "EXPIRED_CONFIRMED", "UNKNOWN", "AMBIGUOUS", "UNSUPPORTED", "RATE_LIMITED", "TRANSPORT_FAILED", "MALFORMED_RESPONSE", "RECONCILIATION_REQUIRED", "PROVENANCE_MISMATCH", "STALE"]);
@@ -161,4 +162,17 @@ export function interpretTargetedOrderResponse(input: InterpretTargetedOrderResp
   const parsed = parseJson(input.rawBody);
   if (parsed === undefined) return base(input, "MALFORMED_RESPONSE", ["MALFORMED_JSON"], null, null, responseHash);
   return normalizeOrder(input, parsed, responseHash);
+}
+
+/** Normalizer handoff for the versioned pure OpenSea adapter. No JSON parsing occurs here. */
+export function interpretOpenSeaExactOrderObservation(input: { readonly context: TargetedVerifierContext; readonly observation: OpenSeaExactOrderObservationV1 }): ProviderResult {
+  const observation = input.observation;
+  if (!isTrustedOpenSeaExactOrderObservation(observation)) return base({ context: input.context, httpStatus: input.observation.httpStatus ?? null, observedAt: null }, "PROVENANCE_MISMATCH", ["HTTP_STATUS_OR_BODY_UNPROVEN"]);
+  if (observation.outcome !== "VALID" || observation.providerStatus === null) return base({ context: input.context, httpStatus: observation.httpStatus, observedAt: observation.observedAt }, observation.outcome === "UNKNOWN" ? "UNKNOWN" : "UNSUPPORTED", observation.reasonCodes, null, null, observation.responseBodySha256);
+  const normalized: NormalizedProviderOrder = { orderHash: observation.orderHash!, chain: observation.chain!, protocolAddress: observation.protocolAddress!, contractAddress: observation.contractAddress!, assetIdentifier: observation.assetIdentifier, status: observation.providerStatus as ProviderStatus, remainingQuantity: observation.remainingQuantity, startTime: observation.startTime, endTime: observation.endTime, isPrivate: false, isCriteria: false };
+  const mapped: InterpretTargetedOrderResponseInput = { context: input.context, httpStatus: observation.httpStatus, observedAt: observation.observedAt, rawResponseArtifactHash: observation.rawResponseArtifactHash };
+  if (observation.providerStatus === "ACTIVE") { if (observation.remainingQuantity === null || observation.startTime === null || observation.endTime === null || !isIso(observation.observedAt)) return base(mapped, "UNKNOWN", ["ACTIVE_TIME_UNPROVEN"], "ACTIVE", normalized, observation.responseBodySha256); return base(mapped, "ACTIVE_CONFIRMED", [], "ACTIVE", normalized, observation.responseBodySha256); }
+  if (observation.providerStatus === "INACTIVE") return base(mapped, "INACTIVE_CONFIRMED", [], "INACTIVE", normalized, observation.responseBodySha256);
+  if (observation.providerStatus === "FULFILLED" || observation.providerStatus === "CANCELLED") return base(mapped, "TERMINAL_CONFIRMED", [], observation.providerStatus as ProviderStatus, normalized, observation.responseBodySha256);
+  return base(mapped, "EXPIRED_CONFIRMED", [], "EXPIRED", normalized, observation.responseBodySha256);
 }

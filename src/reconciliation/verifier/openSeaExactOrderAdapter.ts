@@ -4,6 +4,7 @@ import { OPENSEA_ORDER_CONTRACT_VERSION } from "./targetedVerifierTypes.js";
 import type { TargetedVerifierContext, TransportOutcome } from "./targetedVerifierTypes.js";
 import { isCanonicalAddress, isCanonicalOrderHash, isCanonicalHash, isDecimal } from "./targetedVerifierPolicy.js";
 import { isTrustedTargetedVerifierContext } from "./targetedVerifierContext.js";
+import { parseLosslessJson, type LosslessValue } from "./losslessJson.js";
 
 export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v2-2026-09" as const;
 
@@ -63,11 +64,6 @@ function failure(input: OpenSeaExactOrderRawInput, outcome: OpenSeaExactOrderObs
   const result = deepFreeze({ adapterVersion: OPENSEA_EXACT_ORDER_ADAPTER_VERSION, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, requestIdentity: { method: "GET" as const, endpointPath: "/api/v2/orders/chain/{chain}/protocol/{protocol_address}/{order_hash}", chain: input.context.chain, protocolAddress: input.context.protocolAddress, orderHash: input.context.orderHash }, outcome, reasonCodes: [...new Set(reasonCodes)].sort(), providerStatus: null, orderHash: null, chain: null, protocolAddress: null, contractAddress: null, assetIdentifier: null, offerIdentifier: null, remainingQuantity: null, startTime: null, endTime: null, itemType: null, orderType: null, observedAt: null, observationLowerBound: null, observationUpperBound: null, responseBodySha256: input.body ? hash(input.body) : null, rawResponseArtifactHash: input.rawResponseArtifactHash ?? null, httpStatus: input.httpStatus, transportOutcome: input.transportOutcome ?? "HTTP", supportedListing: false, authorityGranted: false as const, deactivationAuthorityGranted: false as const, ...fields });
   if (isTrustedTargetedVerifierContext(input.context)) { TRUSTED.add(result); OBS_CONTEXT.set(result, input.context); } return result;
 }
-function duplicateKeys(json: string): boolean {
-  const stack: Array<Set<string> | null> = []; let quote = false, esc = false, key = "", inKey = false;
-  for (let i = 0; i < json.length; i++) { const c = json[i]; if (quote) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') { quote = false; if (inKey && stack[stack.length - 1]) { if (stack[stack.length - 1]!.has(key)) return true; stack[stack.length - 1]!.add(key); } } else if (inKey) key += c; continue; } if (c === '"') { quote = true; key = ""; inKey = json[i + 1] !== undefined && json.slice(i + 1).match(/^\s*:/) !== null; } else if (c === "{") stack.push(new Set()); else if (c === "}") stack.pop(); }
-  return false;
-}
 export function adaptOpenSeaExactOrder(input: OpenSeaExactOrderRawInput): OpenSeaExactOrderObservationV1 {
   if (!isTrustedTargetedVerifierContext(input.context)) return failure(input, "MALFORMED", ["UNTRUSTED_TARGETED_VERIFIER_CONTEXT"]);
   if ((input.transportOutcome ?? "HTTP") !== "HTTP") return failure(input, "TRANSPORT_FAILED", [input.transportOutcome === "TIMEOUT" ? "REQUEST_TIMEOUT" : "CONNECTION_RESET"]);
@@ -87,7 +83,7 @@ export function adaptOpenSeaExactOrder(input: OpenSeaExactOrderRawInput): OpenSe
   if (input.responseBodySha256 !== undefined && input.responseBodySha256 !== null && input.responseBodySha256 !== actual) return failure(input, "MALFORMED", ["RAW_RESPONSE_HASH_MISMATCH"]);
   if (input.rawResponseArtifactHash !== undefined && input.rawResponseArtifactHash !== null && !isCanonicalHash(input.rawResponseArtifactHash)) return failure(input, "MALFORMED", ["RAW_RESPONSE_ARTIFACT_HASH_INVALID"]);
   let text: string; let root: any;
-  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); if (text.charCodeAt(0) === 0xfeff || duplicateKeys(text)) return failure(input, "MALFORMED", ["MALFORMED_JSON"]); root = JSON.parse(text); } catch { return failure(input, "MALFORMED", ["MALFORMED_JSON"]); }
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); if (text.charCodeAt(0) === 0xfeff) return failure(input, "MALFORMED", ["MALFORMED_JSON"]); const convert = (v: LosslessValue): any => Array.isArray(v) ? v.map(convert) : v !== null && typeof v === "object" && "kind" in v && (v as any).kind === "number" ? (v as any).raw : v !== null && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k, convert(x as LosslessValue)])) : v; root = convert(parseLosslessJson(text)); } catch { return failure(input, "MALFORMED", ["MALFORMED_JSON"]); }
   if (input.httpStatus !== 200) return failure(input, input.httpStatus === 404 ? "UNKNOWN" : "UNSUPPORTED", [input.httpStatus === 404 ? "HTTP_404_NOT_STATE_PROOF" : `HTTP_${input.httpStatus ?? "STATUS"}`]);
   if (root === null || typeof root !== "object" || Array.isArray(root) || root.order === null || typeof root.order !== "object" || Array.isArray(root.order)) return failure(input, "MALFORMED", ["RESPONSE_OBJECT_REQUIRED"]);
   const order = root.order as Record<string, any>; const params = order.protocol_data?.parameters;
@@ -102,13 +98,14 @@ export function adaptOpenSeaExactOrder(input: OpenSeaExactOrderRawInput): OpenSe
   const orderHash = order.order_hash, chain = order.chain, protocol = order.protocol_address, contract = asset?.contract;
   if (!isCanonicalOrderHash(orderHash) || orderHash !== input.context.orderHash || chain !== input.context.chain || !isCanonicalAddress(protocol) || protocol !== input.context.protocolAddress || !isCanonicalAddress(contract) || contract !== input.context.contractAddress) return failure(input, "MALFORMED", ["IDENTITY_MISMATCH"]);
   const assetId = asset?.identifier; const offerId = Array.isArray(offer) && offer.length === 1 ? offer[0]?.identifier_or_criteria : null;
-  const itemType = Array.isArray(offer) && offer.length === 1 ? offer[0]?.item_type : null;
+  const itemRaw = Array.isArray(offer) && offer.length === 1 ? offer[0]?.item_type : null; const itemType = typeof itemRaw === "string" && isDecimal(itemRaw) ? Number(itemRaw) : itemRaw;
   const validIds = isDecimal(assetId) && isDecimal(offerId) && assetId === offerId && assetId === input.context.expectedIdentity.tokenId;
   const documentedStatus = new Set(["ACTIVE", "INACTIVE", "FULFILLED", "CANCELLED", "EXPIRED"]);
   const startTime = typeof params?.start_time === "string" && isDecimal(params.start_time) ? params.start_time : null; const endTime = typeof params?.end_time === "string" && isDecimal(params.end_time) ? params.end_time : null;
   const intervalInside = observedAt !== null && startTime !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(startTime) * 1000n && BigInt(dateMs + 1000) < BigInt(endTime) * 1000n;
   const expiredProof = observedAt !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(endTime) * 1000n;
   const temporalProof = order.status === "ACTIVE" ? intervalInside : order.status === "EXPIRED" ? expiredProof : observedAt !== null;
-  const listing = validIds && itemType === 2 && offer[0]?.token === input.context.contractAddress && offer[0]?.start_amount === "1" && offer[0]?.end_amount === "1" && (params?.order_type === 0 || params?.order_type === "FULL_OPEN") && typeof order.status === "string" && documentedStatus.has(order.status) && temporalProof;
+  const orderType = typeof params?.order_type === "string" && isDecimal(params.order_type) ? Number(params.order_type) : params?.order_type;
+  const listing = validIds && itemType === 2 && offer[0]?.token === input.context.contractAddress && offer[0]?.start_amount === "1" && offer[0]?.end_amount === "1" && orderType === 0 && typeof order.status === "string" && documentedStatus.has(order.status) && temporalProof;
   return failure(input, listing ? "VALID" : "UNSUPPORTED", listing ? [] : ["UNSUPPORTED_ORDER_SHAPE"], { providerStatus: typeof order.status === "string" ? order.status : null, orderHash, chain, protocolAddress: protocol, contractAddress: contract, assetIdentifier: typeof assetId === "string" ? assetId : null, offerIdentifier: typeof offerId === "string" ? offerId : null, remainingQuantity: typeof order.remaining_quantity === "string" && isDecimal(order.remaining_quantity) ? order.remaining_quantity : null, startTime, endTime, itemType: typeof itemType === "number" ? itemType : null, orderType: params?.order_type ?? null, supportedListing: listing, observedAt, observationLowerBound, observationUpperBound });
 }

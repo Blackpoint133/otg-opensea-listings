@@ -4,108 +4,180 @@ import { OPENSEA_ORDER_CONTRACT_VERSION } from "./targetedVerifierTypes.js";
 import type { TargetedVerifierContext, TransportOutcome } from "./targetedVerifierTypes.js";
 import { isCanonicalAddress, isCanonicalOrderHash, isCanonicalHash, isDecimal } from "./targetedVerifierPolicy.js";
 import { isTrustedTargetedVerifierContext } from "./targetedVerifierContext.js";
-import { parseLosslessJson, type LosslessValue } from "./losslessJson.js";
-
-export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v2-2026-09" as const;
-
+import { parseLosslessJson, isJsonObject, jsonInt32 } from "./losslessJson.js";
+export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v3-2026-09" as const;
 export interface OpenSeaExactOrderRawInput {
-  readonly context: TargetedVerifierContext;
-  readonly httpStatus: number | null;
-  readonly body: Uint8Array | null;
-  readonly responseBodySha256?: string | null;
-  readonly rawResponseArtifactHash?: string | null;
-  readonly headers?: readonly { readonly name: string; readonly value: string }[];
-  readonly requestStartedAt?: string;
-  readonly responseHeadersAt?: string;
-  readonly responseCompletedAt?: string;
-  readonly transportOutcome?: TransportOutcome;
+    readonly context: TargetedVerifierContext;
+    readonly httpStatus: number | null;
+    readonly body: Uint8Array | null;
+    readonly responseBodySha256?: string | null;
+    readonly rawResponseArtifactHash?: string | null;
+    readonly headers?: readonly {
+        readonly name: string;
+        readonly value: string;
+    }[];
+    readonly requestStartedAt?: string;
+    readonly responseHeadersAt?: string;
+    readonly responseCompletedAt?: string;
+    readonly transportOutcome?: TransportOutcome;
 }
-
 export interface OpenSeaExactOrderObservationV1 {
-  readonly adapterVersion: typeof OPENSEA_EXACT_ORDER_ADAPTER_VERSION;
-  readonly providerContractVersion: string;
-  readonly requestIdentity: { readonly method: "GET"; readonly endpointPath: string; readonly chain: string; readonly protocolAddress: string; readonly orderHash: string };
-  readonly outcome: "VALID" | "UNKNOWN" | "MALFORMED" | "UNSUPPORTED" | "TRANSPORT_FAILED";
-  readonly reasonCodes: readonly string[];
-  readonly providerStatus: string | null;
-  readonly orderHash: string | null;
-  readonly chain: string | null;
-  readonly protocolAddress: string | null;
-  readonly contractAddress: string | null;
-  readonly assetIdentifier: string | null;
-  readonly offerIdentifier: string | null;
-  readonly remainingQuantity: string | null;
-  readonly startTime: string | null;
-  readonly endTime: string | null;
-  readonly itemType: number | null;
-  readonly orderType: number | string | null;
-  readonly observedAt: string | null;
-  readonly observationLowerBound: string | null;
-  readonly observationUpperBound: string | null;
-  readonly responseBodySha256: string | null;
-  readonly rawResponseArtifactHash: string | null;
-  readonly httpStatus: number | null;
-  readonly transportOutcome: TransportOutcome;
-  readonly supportedListing: boolean;
-  readonly authorityGranted: false;
-  readonly deactivationAuthorityGranted: false;
+    readonly adapterVersion: typeof OPENSEA_EXACT_ORDER_ADAPTER_VERSION;
+    readonly providerContractVersion: string;
+    readonly requestIdentity: {
+        readonly method: "GET";
+        readonly endpointPath: string;
+        readonly chain: string;
+        readonly protocolAddress: string;
+        readonly orderHash: string;
+    };
+    readonly outcome: "VALID" | "UNKNOWN" | "MALFORMED" | "UNSUPPORTED" | "TRANSPORT_FAILED" | "AMBIGUOUS" | "RATE_LIMITED";
+    readonly reasonCodes: readonly string[];
+    readonly providerStatus: string | null;
+    readonly orderHash: string | null;
+    readonly chain: string | null;
+    readonly protocolAddress: string | null;
+    readonly contractAddress: string | null;
+    readonly assetIdentifier: string | null;
+    readonly offerIdentifier: string | null;
+    readonly remainingQuantity: string | null;
+    readonly startTime: string | null;
+    readonly endTime: string | null;
+    readonly itemType: number | null;
+    readonly orderType: number | string | null;
+    readonly observedAt: string | null;
+    readonly observationLowerBound: string | null;
+    readonly observationUpperBound: string | null;
+    readonly responseBodySha256: string | null;
+    readonly rawResponseArtifactHash: string | null;
+    readonly httpStatus: number | null;
+    readonly transportOutcome: TransportOutcome;
+    readonly supportedListing: boolean;
+    readonly authorityGranted: false;
+    readonly deactivationAuthorityGranted: false;
 }
-
 const TRUSTED = new WeakSet<object>();
 const OBS_CONTEXT = new WeakMap<object, TargetedVerifierContext>();
 export function isTrustedOpenSeaExactOrderObservation(value: unknown): value is OpenSeaExactOrderObservationV1 { return value !== null && typeof value === "object" && TRUSTED.has(value); }
 export function isObservationBoundToContext(value: unknown, context: TargetedVerifierContext): boolean { return isTrustedOpenSeaExactOrderObservation(value) && OBS_CONTEXT.get(value) === context; }
 function hash(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 function headerValues(headers: OpenSeaExactOrderRawInput["headers"], name: string): string[] {
-  if (!headers || !Array.isArray(headers)) return [];
-  return headers.filter((h) => h.name.toLowerCase() === name).map((h) => h.value);
+    if (!headers || !Array.isArray(headers))
+        return [];
+    return headers.filter((h) => h.name.toLowerCase() === name).map((h) => h.value);
 }
 function failure(input: OpenSeaExactOrderRawInput, outcome: OpenSeaExactOrderObservationV1["outcome"], reasonCodes: string[], fields: Partial<OpenSeaExactOrderObservationV1> = {}): OpenSeaExactOrderObservationV1 {
-  const result = deepFreeze({ adapterVersion: OPENSEA_EXACT_ORDER_ADAPTER_VERSION, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, requestIdentity: { method: "GET" as const, endpointPath: "/api/v2/orders/chain/{chain}/protocol/{protocol_address}/{order_hash}", chain: input.context.chain, protocolAddress: input.context.protocolAddress, orderHash: input.context.orderHash }, outcome, reasonCodes: [...new Set(reasonCodes)].sort(), providerStatus: null, orderHash: null, chain: null, protocolAddress: null, contractAddress: null, assetIdentifier: null, offerIdentifier: null, remainingQuantity: null, startTime: null, endTime: null, itemType: null, orderType: null, observedAt: null, observationLowerBound: null, observationUpperBound: null, responseBodySha256: input.body ? hash(input.body) : null, rawResponseArtifactHash: input.rawResponseArtifactHash ?? null, httpStatus: input.httpStatus, transportOutcome: input.transportOutcome ?? "HTTP", supportedListing: false, authorityGranted: false as const, deactivationAuthorityGranted: false as const, ...fields });
-  if (isTrustedTargetedVerifierContext(input.context)) { TRUSTED.add(result); OBS_CONTEXT.set(result, input.context); } return result;
+    const result = deepFreeze({ adapterVersion: OPENSEA_EXACT_ORDER_ADAPTER_VERSION, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, requestIdentity: { method: "GET" as const, endpointPath: "/api/v2/orders/chain/{chain}/protocol/{protocol_address}/{order_hash}", chain: input.context.chain, protocolAddress: input.context.protocolAddress, orderHash: input.context.orderHash }, outcome, reasonCodes: [...new Set(reasonCodes)].sort(), providerStatus: null, orderHash: null, chain: null, protocolAddress: null, contractAddress: null, assetIdentifier: null, offerIdentifier: null, remainingQuantity: null, startTime: null, endTime: null, itemType: null, orderType: null, observedAt: null, observationLowerBound: null, observationUpperBound: null, responseBodySha256: input.body ? hash(input.body) : null, rawResponseArtifactHash: input.rawResponseArtifactHash ?? null, httpStatus: input.httpStatus, transportOutcome: input.transportOutcome ?? "HTTP", supportedListing: false, authorityGranted: false as const, deactivationAuthorityGranted: false as const, ...fields });
+    if (isTrustedTargetedVerifierContext(input.context)) {
+        TRUSTED.add(result);
+        OBS_CONTEXT.set(result, input.context);
+    }
+    return result;
 }
 export function adaptOpenSeaExactOrder(input: OpenSeaExactOrderRawInput): OpenSeaExactOrderObservationV1 {
-  if (!isTrustedTargetedVerifierContext(input.context)) return failure(input, "MALFORMED", ["UNTRUSTED_TARGETED_VERIFIER_CONTEXT"]);
-  if ((input.transportOutcome ?? "HTTP") !== "HTTP") return failure(input, "TRANSPORT_FAILED", [input.transportOutcome === "TIMEOUT" ? "REQUEST_TIMEOUT" : "CONNECTION_RESET"]);
-  if (input.httpStatus === 404) return failure(input, "UNKNOWN", ["HTTP_404_NOT_STATE_PROOF"]);
-  if (!input.body) return failure(input, input.transportOutcome === "HTTP" ? "UNKNOWN" : "TRANSPORT_FAILED", ["HTTP_STATUS_OR_BODY_UNPROVEN"]);
-  const bytes = new Uint8Array(input.body); const actual = hash(bytes);
-  if (bytes.byteLength > 1048576) return failure(input, "MALFORMED", ["BODY_TOO_LARGE"]);
-  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return failure(input, "MALFORMED", ["MALFORMED_JSON"]);
-  const headers = input.headers ?? [];
-  const encodingValues = headerValues(headers, "content-encoding");
-  if (encodingValues.length > 1 || encodingValues.some((v) => v.toLowerCase() !== "identity")) return failure(input, "UNSUPPORTED", ["UNSUPPORTED_CONTENT_ENCODING"]);
-  if (headerValues(headers, "age").length > 0) return failure(input, "UNKNOWN", ["OBSERVATION_TIME_INVALID"]);
-  const contentType = headerValues(headers, "content-type");
-  if (input.httpStatus === 200 && (contentType.length !== 1 || !/^application\/json(?:; charset=utf-8)?$/i.test(contentType[0]))) return failure(input, "MALFORMED", ["CONTENT_TYPE_UNSUPPORTED"]);
-  const lengths = headerValues(headers, "content-length");
-  if (lengths.length > 1 || (lengths.length === 1 && (!isDecimal(lengths[0]) || BigInt(lengths[0]) > 1048576n || Number(lengths[0]) !== bytes.byteLength))) return failure(input, "MALFORMED", ["CONTENT_LENGTH_INVALID"]);
-  if (input.responseBodySha256 !== undefined && input.responseBodySha256 !== null && input.responseBodySha256 !== actual) return failure(input, "MALFORMED", ["RAW_RESPONSE_HASH_MISMATCH"]);
-  if (input.rawResponseArtifactHash !== undefined && input.rawResponseArtifactHash !== null && !isCanonicalHash(input.rawResponseArtifactHash)) return failure(input, "MALFORMED", ["RAW_RESPONSE_ARTIFACT_HASH_INVALID"]);
-  let text: string; let root: any;
-  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); if (text.charCodeAt(0) === 0xfeff) return failure(input, "MALFORMED", ["MALFORMED_JSON"]); const convert = (v: LosslessValue): any => Array.isArray(v) ? v.map(convert) : v !== null && typeof v === "object" && "kind" in v && (v as any).kind === "number" ? (v as any).raw : v !== null && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k, convert(x as LosslessValue)])) : v; root = convert(parseLosslessJson(text)); } catch { return failure(input, "MALFORMED", ["MALFORMED_JSON"]); }
-  if (input.httpStatus !== 200) return failure(input, input.httpStatus === 404 ? "UNKNOWN" : "UNSUPPORTED", [input.httpStatus === 404 ? "HTTP_404_NOT_STATE_PROOF" : `HTTP_${input.httpStatus ?? "STATUS"}`]);
-  if (root === null || typeof root !== "object" || Array.isArray(root) || root.order === null || typeof root.order !== "object" || Array.isArray(root.order)) return failure(input, "MALFORMED", ["RESPONSE_OBJECT_REQUIRED"]);
-  const order = root.order as Record<string, any>; const params = order.protocol_data?.parameters;
-  const offer = params?.offer; const asset = order.asset;
-  const dateValues = headerValues(headers, "date");
-  const dateHeader = dateValues.length === 1 ? dateValues[0] : null;
-  const dateMs = dateHeader && /^[A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$/.test(dateHeader) && !Number.isNaN(Date.parse(dateHeader)) && new Date(Date.parse(dateHeader)).toUTCString() === dateHeader ? Date.parse(dateHeader) : NaN;
-  const metadataValid = [input.requestStartedAt, input.responseHeadersAt, input.responseCompletedAt].every((v) => typeof v === "string" && !Number.isNaN(Date.parse(v))) && Date.parse(input.requestStartedAt ?? "") <= Date.parse(input.responseHeadersAt ?? "") && Date.parse(input.responseHeadersAt ?? "") <= Date.parse(input.responseCompletedAt ?? "");
-  const observedAt = Number.isFinite(dateMs) && metadataValid && dateMs >= Date.parse(input.requestStartedAt!) - 300000 && dateMs <= Date.parse(input.responseCompletedAt!) + 300000 ? new Date(dateMs).toISOString() : null;
-  const observationLowerBound = observedAt ? new Date(dateMs - 1000).toISOString() : null;
-  const observationUpperBound = observedAt ? new Date(dateMs + 1000).toISOString() : null;
-  const orderHash = order.order_hash, chain = order.chain, protocol = order.protocol_address, contract = asset?.contract;
-  if (!isCanonicalOrderHash(orderHash) || orderHash !== input.context.orderHash || chain !== input.context.chain || !isCanonicalAddress(protocol) || protocol !== input.context.protocolAddress || !isCanonicalAddress(contract) || contract !== input.context.contractAddress) return failure(input, "MALFORMED", ["IDENTITY_MISMATCH"]);
-  const assetId = asset?.identifier; const offerId = Array.isArray(offer) && offer.length === 1 ? offer[0]?.identifier_or_criteria : null;
-  const itemRaw = Array.isArray(offer) && offer.length === 1 ? offer[0]?.item_type : null; const itemType = typeof itemRaw === "string" && isDecimal(itemRaw) ? Number(itemRaw) : itemRaw;
-  const validIds = isDecimal(assetId) && isDecimal(offerId) && assetId === offerId && assetId === input.context.expectedIdentity.tokenId;
-  const documentedStatus = new Set(["ACTIVE", "INACTIVE", "FULFILLED", "CANCELLED", "EXPIRED"]);
-  const startTime = typeof params?.start_time === "string" && isDecimal(params.start_time) ? params.start_time : null; const endTime = typeof params?.end_time === "string" && isDecimal(params.end_time) ? params.end_time : null;
-  const intervalInside = observedAt !== null && startTime !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(startTime) * 1000n && BigInt(dateMs + 1000) < BigInt(endTime) * 1000n;
-  const expiredProof = observedAt !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(endTime) * 1000n;
-  const temporalProof = order.status === "ACTIVE" ? intervalInside : order.status === "EXPIRED" ? expiredProof : observedAt !== null;
-  const orderType = typeof params?.order_type === "string" && isDecimal(params.order_type) ? Number(params.order_type) : params?.order_type;
-  const listing = validIds && itemType === 2 && offer[0]?.token === input.context.contractAddress && offer[0]?.start_amount === "1" && offer[0]?.end_amount === "1" && orderType === 0 && typeof order.status === "string" && documentedStatus.has(order.status) && temporalProof;
-  return failure(input, listing ? "VALID" : "UNSUPPORTED", listing ? [] : ["UNSUPPORTED_ORDER_SHAPE"], { providerStatus: typeof order.status === "string" ? order.status : null, orderHash, chain, protocolAddress: protocol, contractAddress: contract, assetIdentifier: typeof assetId === "string" ? assetId : null, offerIdentifier: typeof offerId === "string" ? offerId : null, remainingQuantity: typeof order.remaining_quantity === "string" && isDecimal(order.remaining_quantity) ? order.remaining_quantity : null, startTime, endTime, itemType: typeof itemType === "number" ? itemType : null, orderType: params?.order_type ?? null, supportedListing: listing, observedAt, observationLowerBound, observationUpperBound });
+    if (!isTrustedTargetedVerifierContext(input.context))
+        throw new Error("UNTRUSTED_TARGETED_VERIFIER_CONTEXT");
+    if ((input.transportOutcome ?? "HTTP") !== "HTTP")
+        return failure(input, "TRANSPORT_FAILED", [input.transportOutcome === "TIMEOUT" ? "REQUEST_TIMEOUT" : "CONNECTION_RESET"]);
+    if (input.httpStatus === 429)
+        return failure(input, "RATE_LIMITED", ["HTTP_429"]);
+    if (input.httpStatus !== null && input.httpStatus >= 500 && input.httpStatus <= 599)
+        return failure(input, "TRANSPORT_FAILED", ["HTTP_500"]);
+    if (input.httpStatus === 409)
+        return failure(input, "AMBIGUOUS", ["HTTP_409_PROVIDER_CONFLICT"]);
+    if (input.httpStatus === 400)
+        return failure(input, "UNSUPPORTED", ["HTTP_400_UNSUPPORTED_OR_INVALID_REQUEST"]);
+    if (input.httpStatus === 401 || input.httpStatus === 403)
+        return failure(input, "UNKNOWN", [`HTTP_${input.httpStatus}_ACCESS_FAILURE`]);
+    if (input.httpStatus === 404)
+        return failure(input, "UNKNOWN", ["HTTP_404_NOT_STATE_PROOF"]);
+    if (input.httpStatus !== 200)
+        return failure(input, "UNKNOWN", ["HTTP_STATUS_OR_BODY_UNPROVEN"]);
+    if (!input.body)
+        return failure(input, input.transportOutcome === "HTTP" ? "UNKNOWN" : "TRANSPORT_FAILED", ["HTTP_STATUS_OR_BODY_UNPROVEN"]);
+    const bytes = new Uint8Array(input.body);
+    const actual = hash(bytes);
+    if (bytes.byteLength > 1048576)
+        return failure(input, "MALFORMED", ["BODY_TOO_LARGE"]);
+    if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf)
+        return failure(input, "MALFORMED", ["MALFORMED_JSON"]);
+    const headers = input.headers ?? [];
+    const encodingValues = headerValues(headers, "content-encoding");
+    if (encodingValues.length > 1 || encodingValues.some((v) => v.toLowerCase() !== "identity"))
+        return failure(input, "UNSUPPORTED", ["UNSUPPORTED_CONTENT_ENCODING"]);
+    if (headerValues(headers, "age").length > 0)
+        return failure(input, "UNKNOWN", ["OBSERVATION_TIME_INVALID"]);
+    const contentType = headerValues(headers, "content-type");
+    if (input.httpStatus === 200 && (contentType.length !== 1 || !/^application\/json(?:; charset=utf-8)?$/i.test(contentType[0])))
+        return failure(input, "MALFORMED", ["CONTENT_TYPE_UNSUPPORTED"]);
+    const lengths = headerValues(headers, "content-length");
+    if (lengths.length > 1 || (lengths.length === 1 && (!isDecimal(lengths[0]) || BigInt(lengths[0]) > 1048576n || Number(lengths[0]) !== bytes.byteLength)))
+        return failure(input, "MALFORMED", ["CONTENT_LENGTH_INVALID"]);
+    if (input.responseBodySha256 !== undefined && input.responseBodySha256 !== null && input.responseBodySha256 !== actual)
+        return failure(input, "MALFORMED", ["RAW_RESPONSE_HASH_MISMATCH"]);
+    if (input.rawResponseArtifactHash !== undefined && input.rawResponseArtifactHash !== null && !isCanonicalHash(input.rawResponseArtifactHash))
+        return failure(input, "MALFORMED", ["RAW_RESPONSE_ARTIFACT_HASH_INVALID"]);
+    let text: string;
+    let root: any;
+    try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        if (text.charCodeAt(0) === 0xfeff)
+            return failure(input, "MALFORMED", ["MALFORMED_JSON"]);
+        root = parseLosslessJson(text);
+    }
+    catch {
+        return failure(input, "MALFORMED", ["MALFORMED_JSON"]);
+    }
+    if (input.httpStatus !== 200)
+        return failure(input, input.httpStatus === 404 ? "UNKNOWN" : "UNSUPPORTED", [input.httpStatus === 404 ? "HTTP_404_NOT_STATE_PROOF" : `HTTP_${input.httpStatus ?? "STATUS"}`]);
+    if (!isJsonObject(root) || !isJsonObject(root.order))
+        return failure(input, "MALFORMED", ["RESPONSE_OBJECT_REQUIRED"]);
+    const order = root.order as Record<string, any>;
+    const params = order.protocol_data?.parameters;
+    const offer = params?.offer;
+    const asset = order.asset;
+    const dateValues = headerValues(headers, "date");
+    const dateHeader = dateValues.length === 1 ? dateValues[0] : null;
+    const dateMs = dateHeader && /^[A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$/.test(dateHeader) && !Number.isNaN(Date.parse(dateHeader)) && new Date(Date.parse(dateHeader)).toUTCString() === dateHeader ? Date.parse(dateHeader) : NaN;
+    const metadataValid = [input.requestStartedAt, input.responseHeadersAt, input.responseCompletedAt].every((v) => typeof v === "string" && !Number.isNaN(Date.parse(v))) && Date.parse(input.requestStartedAt ?? "") <= Date.parse(input.responseHeadersAt ?? "") && Date.parse(input.responseHeadersAt ?? "") <= Date.parse(input.responseCompletedAt ?? "");
+    const observedAt = Number.isFinite(dateMs) && metadataValid && dateMs >= Date.parse(input.requestStartedAt!) - 300000 && dateMs <= Date.parse(input.responseCompletedAt!) + 300000 ? new Date(dateMs).toISOString() : null;
+    const observationLowerBound = observedAt ? new Date(dateMs - 1000).toISOString() : null;
+    const observationUpperBound = observedAt ? new Date(dateMs + 1000).toISOString() : null;
+    const orderHash = order.order_hash, chain = order.chain, protocol = order.protocol_address, contract = asset?.contract;
+    if (!isCanonicalOrderHash(orderHash) || !isCanonicalAddress(protocol) || !isCanonicalAddress(contract))
+        return failure(input, "MALFORMED", ["IDENTITY_MISMATCH"]);
+    if (orderHash !== input.context.orderHash || chain !== input.context.chain || protocol !== input.context.protocolAddress || contract !== input.context.contractAddress)
+        return failure(input, "AMBIGUOUS", ["IDENTITY_MISMATCH"]);
+    if (asset?.identifier !== undefined && !isDecimal(asset.identifier))
+        return failure(input, "MALFORMED", ["ASSET_IDENTITY_MALFORMED"]);
+    if (order.remaining_quantity !== undefined && !isDecimal(order.remaining_quantity))
+        return failure(input, "MALFORMED", ["REMAINING_QUANTITY_INVALID"]);
+    if (order.is_private === true || order.private_listing === true || order.restricted === true)
+        return failure(input, "UNSUPPORTED", ["PRIVATE_ORDER_UNSUPPORTED"]);
+    if (order.criteria !== undefined || asset?.criteria !== undefined || params?.criteria !== undefined)
+        return failure(input, "UNSUPPORTED", ["CRITERIA_ORDER_UNSUPPORTED"]);
+    if (order.item_type !== undefined && order.item_type !== "ERC721" && jsonInt32(order.item_type) !== 2)
+        return failure(input, "UNSUPPORTED", ["UNSUPPORTED_ORDER_SHAPE"]);
+    const assetId = asset?.identifier;
+    const offerId = Array.isArray(offer) && offer.length === 1 ? offer[0]?.identifier_or_criteria : null;
+    const itemRaw = Array.isArray(offer) && offer.length === 1 ? offer[0]?.item_type : null;
+    const itemType = jsonInt32(itemRaw);
+    const validIds = isDecimal(assetId) && isDecimal(offerId) && assetId === offerId && assetId === input.context.expectedIdentity.tokenId;
+    const documentedStatus = new Set(["ACTIVE", "INACTIVE", "FULFILLED", "CANCELLED", "EXPIRED"]);
+    if (typeof order.status !== "string" || !documentedStatus.has(order.status))
+        return failure(input, "UNKNOWN", ["UNKNOWN_PROVIDER_STATUS"]);
+    const startTime = typeof params?.start_time === "string" && isDecimal(params.start_time) ? params.start_time : null;
+    const endTime = typeof params?.end_time === "string" && isDecimal(params.end_time) ? params.end_time : null;
+    for (const field of ["start_time", "end_time"]) {
+        if (params?.[field] !== undefined && (!isDecimal(params[field]) || BigInt(params[field]) <= 0n || BigInt(params[field]) >= 8640000000000n))
+            return failure(input, "MALFORMED", ["ORDER_TIME_INVALID"]);
+    }
+    if (startTime !== null && endTime !== null && BigInt(startTime) > BigInt(endTime))
+        return failure(input, "MALFORMED", ["ORDER_TIME_RANGE_INVALID"]);
+    const intervalInside = observedAt !== null && startTime !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(startTime) * 1000n && BigInt(dateMs + 1000) < BigInt(endTime) * 1000n;
+    const expiredProof = observedAt !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(endTime) * 1000n;
+    const temporalProof = order.status === "ACTIVE" ? intervalInside : order.status === "EXPIRED" ? expiredProof : observedAt !== null;
+    const orderType = jsonInt32(params?.order_type);
+    const listing = validIds && itemType === 2 && offer[0]?.token === input.context.contractAddress && offer[0]?.start_amount === "1" && offer[0]?.end_amount === "1" && orderType === 0 && typeof order.status === "string" && documentedStatus.has(order.status);
+    return failure(input, listing ? (temporalProof ? "VALID" : "UNKNOWN") : "UNSUPPORTED", listing ? (temporalProof ? [] : ["ACTIVE_TIME_UNPROVEN"]) : ["UNSUPPORTED_ORDER_SHAPE"], { providerStatus: typeof order.status === "string" ? order.status : null, orderHash, chain, protocolAddress: protocol, contractAddress: contract, assetIdentifier: typeof assetId === "string" ? assetId : null, offerIdentifier: typeof offerId === "string" ? offerId : null, remainingQuantity: typeof order.remaining_quantity === "string" && isDecimal(order.remaining_quantity) ? order.remaining_quantity : null, startTime, endTime, itemType: typeof itemType === "number" ? itemType : null, orderType, supportedListing: listing, observedAt, observationLowerBound, observationUpperBound });
 }

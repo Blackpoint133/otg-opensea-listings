@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import { deepFreeze } from "../src/reconciliation/evidence/canonicalEvidence.js";
 import { applyJournalFence, buildTargetedVerifierArtifact, providerResultIsAuthoritative, sameAttemptEvidence, rehydrateAttemptEvidence, verifierArtifactHash, validateFenceResult } from "../src/reconciliation/verifier/targetedVerifierArtifact.js";
 import { attemptIdentity, eventFingerprint, normalizeSafeHeaders, isIso, validateTargetedVerifierEligibility, semanticEvidenceMaterial } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
 import { sha256Canonical } from "../src/reconciliation/evidence/canonicalEvidence.js";
-import { interpretTargetedOrderResponse, validateProviderResult } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
+import { validateProviderResult } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
 import {
   OPENSEA_ORDER_CONTRACT_VERSION, TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION,
   TARGETED_VERIFIER_GENERATION_MODEL_VERSION, TARGETED_VERIFIER_NORMALIZER_VERSION,
@@ -13,6 +13,9 @@ import {
   TARGETED_VERIFIER_SUPPORTED_COLLECTION, type JournalFenceSnapshot,
   type TargetedVerifierContext
 } from "../src/reconciliation/verifier/targetedVerifierTypes.js";
+
+import { providerFixture } from "./helpers/providerResultFixtures.js";
+import { makeTrustedContexts, disposeTrustedContexts } from "./helpers/trustedVerifierContexts.js";
 
 const HASH = "0x" + "a".repeat(64);
 const PROTOCOL = "0x" + "b".repeat(40);
@@ -28,11 +31,14 @@ const CONTEXT: TargetedVerifierContext = deepFreeze({
   sourceProvenance: deepFreeze({ "snapshot.json": "f".repeat(64) }), preVerification: PRE
 });
 
+const fixture = await makeTrustedContexts({ tokenId: "7", protocolAddress: PROTOCOL });
+const trustedContext = fixture.contexts[0];
+after(() => disposeTrustedContexts(fixture.root));
 function body(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({ order_hash: HASH, chain: TARGETED_VERIFIER_SUPPORTED_CHAIN, protocol_address: PROTOCOL, asset: { contract: TARGETED_VERIFIER_SUPPORTED_CONTRACT, identifier: "7" }, status: "ACTIVE", remaining_quantity: "1", protocol_data: { parameters: { startTime: "1700000000", endTime: "2000000000" } }, ...overrides });
 }
-function interpret(rawBody: string, overrides: Partial<Parameters<typeof interpretTargetedOrderResponse>[0]> = {}) {
-  return interpretTargetedOrderResponse({ context: CONTEXT, httpStatus: 200, rawBody, observedAt: "2026-08-24T10:00:00.000Z", ...overrides });
+function interpret(rawBody: string, overrides: Partial<Parameters<typeof providerFixture>[0]> = {}) {
+  return providerFixture({ context: trustedContext, httpStatus: 200, rawBody, observedAt: "2026-08-24T10:00:00.000Z", ...overrides });
 }
 function completeAttempt(active: ReturnType<typeof interpret>, fence: ReturnType<typeof applyJournalFence>, overrides: Record<string, unknown> = {}) {
   const evidence: any = {
@@ -74,7 +80,7 @@ test("explicit provider states have distinct semantics", () => {
   assert.equal(interpret(body({ status: "INACTIVE" })).status, "INACTIVE_CONFIRMED");
   assert.equal(interpret(body({ status: "FULFILLED" })).status, "TERMINAL_CONFIRMED");
   assert.equal(interpret(body({ status: "CANCELLED" })).status, "TERMINAL_CONFIRMED");
-  assert.equal(interpret(body({ status: "EXPIRED" })).status, "EXPIRED_CONFIRMED");
+  assert.equal(interpret(body({ status: "EXPIRED", protocol_data: { parameters: { startTime: "1700000000", endTime: "1700000001" } } })).status, "EXPIRED_CONFIRMED");
   assert.equal(interpret(body({ status: "MYSTERY" })).status, "UNKNOWN");
   assert.equal(interpret(body({ is_private: true })).status, "UNSUPPORTED");
   assert.equal(interpret(body({ criteria: {} })).status, "UNSUPPORTED");
@@ -82,7 +88,7 @@ test("explicit provider states have distinct semantics", () => {
 
 test("404, empty/null/array, and transport outcomes never become inactive", () => {
   for (const status of ["UNKNOWN", "UNKNOWN", "UNKNOWN"] as const) void status;
-  const notFound = interpretTargetedOrderResponse({ context: CONTEXT, httpStatus: 404, rawBody: "", observedAt: null });
+  const notFound = providerFixture({ context: trustedContext, httpStatus: 404, rawBody: "", observedAt: null });
   assert.equal(notFound.status, "UNKNOWN");
   assert.notEqual(notFound.status, "INACTIVE_CONFIRMED");
   assert.notEqual(notFound.status, "TERMINAL_CONFIRMED");

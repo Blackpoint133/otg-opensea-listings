@@ -10,8 +10,10 @@ import { persistIntegratedEvidence, reconstructIntegratedEvidence } from "../src
 import { deriveTargetedVerifierContext, isTrustedTargetedVerifierContext } from "../src/reconciliation/verifier/targetedVerifierContext.js";
 import { applyJournalFence, buildAttemptEvidence, buildTargetedVerifierArtifact, validateFenceResult, validateAttemptEvidenceForContext } from "../src/reconciliation/verifier/targetedVerifierArtifact.js";
 import { eventFingerprint, validateTargetedVerifierEligibility, validateAttemptEvidence } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
-import { interpretTargetedOrderResponse, validateProviderResult } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
+import { validateProviderResult } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
 import { canonicalEvidence } from "../src/reconciliation/evidence/canonicalEvidence.js";
+
+import { providerFixture } from "./helpers/providerResultFixtures.js";
 
 const CONTRACT = "0x9ed98e159be43a8d42b64053831fcae5e4d7d271";
 const PROTOCOL = "0x" + "1".repeat(40);
@@ -38,8 +40,8 @@ test("runtime trusted contexts and provider/fence cross-pair matrix", async () =
   const f = await makeContexts();
   try {
     const [contextA, contextB] = f.contexts; assert.equal(isTrustedTargetedVerifierContext(contextA), true); assert.equal(isTrustedTargetedVerifierContext(contextB), true);
-    const providerA = interpretTargetedOrderResponse({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1"), observedAt: "2026-01-01T00:00:00.000Z" });
-    const providerB = interpretTargetedOrderResponse({ context: contextB, httpStatus: 200, rawBody: body(HASH_B, "2"), observedAt: "2026-01-01T00:00:00.000Z" });
+    const providerA = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1"), observedAt: "2026-01-01T00:00:00.000Z" });
+    const providerB = providerFixture({ context: contextB, httpStatus: 200, rawBody: body(HASH_B, "2"), observedAt: "2026-01-01T00:00:00.000Z" });
     const preA = { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }, preB = { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) };
     const fenceA = applyJournalFence(providerA, preA, preA), fenceB = applyJournalFence(providerB, preB, preB);
     assert.throws(() => buildAttemptEvidence({ context: contextA, attemptNumber: 0, providerResult: providerA, fenceResult: fenceB }), /FENCE_PROVIDER_MISMATCH|FENCE_CONTEXT_ORDER_MISMATCH/);
@@ -52,7 +54,7 @@ test("runtime trusted contexts and provider/fence cross-pair matrix", async () =
 test("final artifact rejects cross-order provider/fence pair", async () => {
   const f = await makeContexts();
   try {
-    const [a, b] = f.contexts; const pa = interpretTargetedOrderResponse({ context: a, httpStatus: 200, rawBody: body(HASH_A, "1"), observedAt: "2026-01-01T00:00:00.000Z" }); const pb = interpretTargetedOrderResponse({ context: b, httpStatus: 200, rawBody: body(HASH_B, "2"), observedAt: "2026-01-01T00:00:00.000Z" }); const fa = applyJournalFence(pa, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }); const fb = applyJournalFence(pb, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) }, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) });
+    const [a, b] = f.contexts; const pa = providerFixture({ context: a, httpStatus: 200, rawBody: body(HASH_A, "1"), observedAt: "2026-01-01T00:00:00.000Z" }); const pb = providerFixture({ context: b, httpStatus: 200, rawBody: body(HASH_B, "2"), observedAt: "2026-01-01T00:00:00.000Z" }); const fa = applyJournalFence(pa, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }); const fb = applyJournalFence(pb, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) }, { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) });
     assert.throws(() => buildTargetedVerifierArtifact({ context: a, startedAt: START, completedAt: END, providerResult: pb, fenceResult: fb, transportOutcome: "HTTP", safeHeaders: {} }), /PROVIDER_CONTEXT_MISMATCH|FENCE_CONTEXT_ORDER_MISMATCH|FENCE_PROVIDER_MISMATCH/); assert.equal(validateTargetedVerifierEligibility(a).valid, true);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
@@ -61,8 +63,8 @@ test("same trusted context binds distinct provider semantic content", async () =
   const f = await makeContexts();
   try {
     const contextA = f.contexts[0];
-    const providerA1 = interpretTargetedOrderResponse({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "ACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
-    const providerA2 = interpretTargetedOrderResponse({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "INACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
+    const providerA1 = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "ACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
+    const providerA2 = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "INACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
     assert.equal(validateProviderResult(providerA1), true); assert.equal(validateProviderResult(providerA2), true); assert.notEqual(canonicalEvidence(providerA1), canonicalEvidence(providerA2));
     const pre = { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) };
     const fenceA1 = applyJournalFence(providerA1, pre, pre), fenceA2 = applyJournalFence(providerA2, pre, pre);

@@ -1,0 +1,90 @@
+{
+  "operationId": "get_order",
+  "response": {
+    "description": "Order details retrieved successfully",
+    "content": {
+      "*/*": {
+        "schema": {
+          "$ref": "#/components/schemas/GetOrderResponse"
+        }
+      }
+    }
+  },
+  "GetOrderResponse": {
+    "type": "object",
+    "properties": {
+      "order": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/Listing" },
+          { "$ref": "#/components/schemas/Offer" }
+        ]
+      }
+    },
+    "required": ["order"]
+  },
+  "Listing": {
+    "allOf": [
+      { "$ref": "#/components/schemas/ListingOrOffer" },
+      {
+        "type": "object",
+        "properties": {
+          "order_hash": { "type": "string" },
+          "chain": { "type": "string" },
+          "protocol_data": { "$ref": "#/components/schemas/ProtocolData" },
+          "protocol_address": { "type": "string" },
+          "asset": { "$ref": "#/components/schemas/OrderAsset" },
+          "remaining_quantity": { "type": "integer", "format": "int64" },
+          "order_created_at": { "type": "integer", "format": "int64" },
+          "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "FULFILLED", "EXPIRED", "CANCELLED"] },
+          "type": { "type": "string" }
+        },
+        "required": ["chain", "price", "remaining_quantity", "status", "type"]
+      }
+    ]
+  },
+  "OrderAsset": {
+    "type": "object",
+    "properties": {
+      "identifier": { "type": "string" },
+      "contract": { "type": "string" }
+    },
+    "required": ["contract"]
+  },
+  "ProtocolData": {
+    "type": "object",
+    "properties": {
+      "parameters": { "$ref": "#/components/schemas/Parameters" },
+      "signature": { "type": "string" }
+    },
+    "required": ["parameters"]
+  },
+  "Parameters": {
+    "type": "object",
+    "properties": {
+      "offerer": { "type": "string" },
+      "offer": { "type": "array", "items": { "$ref": "#/components/schemas/Item" } },
+      "consideration": { "type": "array", "items": { "$ref": "#/components/schemas/ConsiderationItem" } },
+      "startTime": { "type": "string" },
+      "endTime": { "type": "string" },
+      "orderType": { "type": "integer", "format": "int32" },
+      "zone": { "type": "string" },
+      "zoneHash": { "type": "string" },
+      "salt": { "type": "string" },
+      "conduitKey": { "type": "string" },
+      "totalOriginalConsiderationItems": { "type": "integer", "format": "int32" },
+      "counter": { "type": "integer" }
+    },
+    "required": ["conduitKey", "consideration", "counter", "endTime", "offer", "offerer", "orderType", "salt", "startTime", "totalOriginalConsiderationItems", "zone", "zoneHash"]
+  },
+  "Item": {
+    "type": "object",
+    "properties": {
+      "itemType": { "type": "integer", "format": "int32" },
+      "token": { "type": "string" },
+      "identifierOrCriteria": { "type": "string" },
+      "startAmount": { "type": "string" },
+      "endAmount": { "type": "string" }
+    },
+    "required": ["endAmount", "identifierOrCriteria", "itemType", "startAmount", "token"]
+  }
+}

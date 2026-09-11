@@ -7,7 +7,7 @@ export const OPENAPI_VERSION = "3.1.0" as const;
 export const OPENAPI_INFO_VERSION = "2.0.0" as const;
 export const GET_ORDER_OPERATION_ID = "get_order" as const;
 export const GET_ORDER_RESPONSE_REF = "#/components/schemas/GetOrderResponse" as const;
-export const GET_ORDER_SCHEMA_SHA256 = "5960ac559f3f847f05581e3185a2eae009a85918a9f380605c6d5fc33e10eafa" as const;
+export const GET_ORDER_SCHEMA_SHA256 = "9176d22da88aa04b9688be7b5be9ccd08d71a61b95796be33af3bb6e107a2e72" as const;
 
 /** The GetOrderResponse.order oneOf is Listing | Offer. The adapter accepts Listing only. */
 export const GET_ORDER_FIELD_CONTRACT = Object.freeze({

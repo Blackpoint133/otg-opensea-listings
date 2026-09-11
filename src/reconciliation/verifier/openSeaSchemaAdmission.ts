@@ -13,6 +13,7 @@ function item(value: LosslessJsonValue, consideration: boolean): boolean {
 
 function price(value: LosslessJsonValue): boolean {
   if (!isJsonObject(value)) return false;
+  if (!Object.prototype.hasOwnProperty.call(value, "current")) return true;
   const current = (value as Record<string, LosslessJsonValue>).current;
   return isJsonObject(current) && stringField(current, "currency") &&
     integerField(current, "decimals") && stringField(current, "value");

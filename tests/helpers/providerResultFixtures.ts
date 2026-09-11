@@ -15,6 +15,9 @@ export function providerFixture(input: {
         if (order && typeof order === "object" && !Array.isArray(order) && !("order" in order)) {
             const p = order.protocol_data?.parameters;
             if (p && typeof p === "object") {
+                order.price ??= {};
+                order.type ??= "basic";
+                p.offerer ??= "0x" + "2".repeat(40); p.consideration ??= [{ itemType: 2, token: order.asset?.contract, identifierOrCriteria: order.asset?.identifier, startAmount: "1", endAmount: "1", recipient: "0x" + "2".repeat(40) }]; p.zone ??= "0x" + "3".repeat(40); p.zoneHash ??= "0x" + "0".repeat(64); p.salt ??= "1"; p.conduitKey ??= "0x" + "0".repeat(64); p.totalOriginalConsiderationItems ??= 0; p.counter ??= 0;
                 if (typeof order.remaining_quantity === "string" && /^\d+$/.test(order.remaining_quantity)) order.remaining_quantity = Number(order.remaining_quantity);
                 const offer = "offer" in p ? p.offer : [{
                         itemType: 2, token: order.asset?.contract, identifierOrCriteria: order.asset?.identifier,

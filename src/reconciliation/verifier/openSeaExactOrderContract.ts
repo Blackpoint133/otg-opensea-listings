@@ -8,6 +8,7 @@ export const OPENAPI_INFO_VERSION = "2.0.0" as const;
 export const GET_ORDER_OPERATION_ID = "get_order" as const;
 export const GET_ORDER_RESPONSE_REF = "#/components/schemas/GetOrderResponse" as const;
 export const GET_ORDER_SCHEMA_SHA256 = "9176d22da88aa04b9688be7b5be9ccd08d71a61b95796be33af3bb6e107a2e72" as const;
+export const GET_ORDER_SCHEMA_EXTRACTION = "recursive-local-ref-graph-v1; canonical UTF-8 JSON.stringify with insertion order" as const;
 
 /** The GetOrderResponse.order oneOf is Listing | Offer. The adapter accepts Listing only. */
 export const GET_ORDER_FIELD_CONTRACT = Object.freeze({

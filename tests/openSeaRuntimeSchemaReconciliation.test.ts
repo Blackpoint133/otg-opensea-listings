@@ -66,7 +66,7 @@ test("runtime metadata is repinned to the immutable Task-32 evidence", () => {
   assert.equal(GET_ORDER_SCHEMA_SHA256, "9cd70ac9d6b96532015ab0ce2e13a5220f69e6bc3b97baa66033c04834d6dc90");
   assert.match(GET_ORDER_SCHEMA_EXTRACTION, /sorted-json-v1/);
   assert.equal(OPENSEA_ORDER_CONTRACT_VERSION, "opensea-get-order-v2-2026-09");
-  assert.equal(OPENSEA_EXACT_ORDER_ADAPTER_VERSION, "opensea-exact-order-adapter-v9-2026-09");
+  assert.equal(OPENSEA_EXACT_ORDER_ADAPTER_VERSION, "opensea-exact-order-adapter-v10-2026-09");
   const observation = adaptOpenSeaExactOrder(input(encodeCanonicalOrder(makeCanonicalOfficialOrder(context))));
   assert.equal(observation.openApiDocumentSha256, OPENAPI_DOCUMENT_SHA256);
   assert.equal(observation.getOrderSchemaSha256, GET_ORDER_SCHEMA_SHA256);

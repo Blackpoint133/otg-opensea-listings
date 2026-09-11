@@ -1,4 +1,34 @@
-import fs from 'node:fs'; import crypto from 'node:crypto';
-const file=process.argv[2]; if(!file) throw new Error('usage: node scripts/extract_opensea_get_order_schema.mjs OPENAPI.json');
-const bytes=fs.readFileSync(file); const full=crypto.createHash('sha256').update(bytes).digest('hex'); const expected='feeb155c9a12fe05e332177014a9d8e7e9ab37fe008c8f37d9bd17c5185cf922'; if(full!==expected) throw new Error('OPENAPI_SHA_MISMATCH:'+full);
-const doc=JSON.parse(bytes); const schemas=doc.components?.schemas??{}; const seen=new Set(); const walk=x=>{if(!x||typeof x!=='object')return;if(typeof x.$ref==='string'&&x.$ref.startsWith('#/components/schemas/')){const n=x.$ref.split('/').pop();if(!seen.has(n)){seen.add(n);walk(schemas[n]);}}Object.values(x).forEach(walk)}; const op=Object.values(doc.paths??{}).flatMap(p=>Object.values(p)).find(x=>x?.operationId==='get_order'); walk(op?.responses?.['200']?.content?.['*/*']?.schema); const out={operationId:'get_order',components:{schemas:Object.fromEntries([...seen].sort().map(n=>[n,schemas[n]]))}}; const canon=JSON.stringify(out); console.log(JSON.stringify({fullSha256:full,extractedSha256:crypto.createHash('sha256').update(canon).digest('hex'),components:[...seen].sort()},null,2));
+import fs from "node:fs";
+import {
+  CURRENT_OPENAPI_DOCUMENT_SHA256,
+  CURRENT_GET_ORDER_SCHEMA_SHA256,
+  canonicalJson,
+  extractGetOrderSchemaFromBytes,
+  sha256Hex,
+  unresolvedLocalSchemaRefs,
+} from "./lib/openseaGetOrderSchemaExtraction.mjs";
+
+const args = process.argv.slice(2);
+const input = args[0];
+const outputIndex = args.indexOf("--output");
+const output = outputIndex >= 0 ? args[outputIndex + 1] : null;
+if (!input || (outputIndex >= 0 && !output)) {
+  throw new Error("usage: node scripts/extract_opensea_get_order_schema.mjs OPENAPI.json [--output FIXTURE.json]");
+}
+
+const bytes = fs.readFileSync(input);
+const fixture = extractGetOrderSchemaFromBytes(bytes);
+const canonical = canonicalJson(fixture);
+const extractedSha256 = sha256Hex(Buffer.from(canonical, "utf8"));
+if (extractedSha256 !== CURRENT_GET_ORDER_SCHEMA_SHA256) throw new Error(`GET_ORDER_SCHEMA_SHA_MISMATCH:${extractedSha256}`);
+if (output) fs.writeFileSync(output, Buffer.from(canonical, "utf8"));
+
+console.log(JSON.stringify({
+  fullSha256: CURRENT_OPENAPI_DOCUMENT_SHA256,
+  extractedSha256,
+  expectedExtractedSha256: CURRENT_GET_ORDER_SCHEMA_SHA256,
+  canonicalization: "sorted-json-v1",
+  output,
+  components: Object.keys(fixture.components.schemas).sort(),
+  unresolvedLocalRefs: unresolvedLocalSchemaRefs(fixture),
+}, null, 2));

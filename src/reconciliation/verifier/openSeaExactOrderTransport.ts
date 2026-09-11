@@ -6,6 +6,7 @@ import type { TargetedVerifierContext } from "./targetedVerifierTypes.js";
 export const OPENSEA_EXACT_ORDER_HTTP_TRANSPORT_VERSION = "opensea-exact-order-http-transport-v1-2026-09" as const;
 const HOST = "api.opensea.io" as const;
 const ONE_MIB = 1048576;
+export const MAX_OVERALL_DEADLINE_MS = 2147483647;
 
 export interface OpenSeaTransportRequestOptions { readonly hostname: typeof HOST; readonly protocol: "https:"; readonly method: "GET"; readonly path: string; readonly headers: Readonly<Record<string, string>>; }
 interface TransportResponse { readonly statusCode?: number; readonly rawHeaders?: readonly string[]; on(event: string, listener: (...args: any[]) => void): this; destroy?(): void; }
@@ -31,12 +32,13 @@ function timing(clock: OpenSeaTransportClock, startedWall: number, startedMono: 
 }
 
 /** Execute exactly one fixed-host HTTPS Get Order request and immediately adapt it. */
-export function executeOpenSeaExactOrderRequest(input: { readonly context: TargetedVerifierContext; readonly apiKey: string; readonly overallDeadlineMs: number; readonly requestFactory?: OpenSeaRequestFactory; readonly clock?: OpenSeaTransportClock; }): Promise<OpenSeaExactOrderObservationV1> {
+type CoreInput = { readonly context: TargetedVerifierContext; readonly apiKey: string; readonly overallDeadlineMs: number; readonly requestFactory: OpenSeaRequestFactory; readonly clock: OpenSeaTransportClock; };
+function executeCore(input: CoreInput): Promise<OpenSeaExactOrderObservationV1> {
   if (!isTrustedTargetedVerifierContext(input.context)) throw new Error("UNTRUSTED_TARGETED_VERIFIER_CONTEXT");
   if (!validApiKey(input.apiKey)) throw new Error("INVALID_OPENSEA_API_KEY");
-  if (typeof input.overallDeadlineMs !== "number" || !Number.isSafeInteger(input.overallDeadlineMs) || input.overallDeadlineMs <= 0) throw new Error("INVALID_OVERALL_DEADLINE");
-  const clock = input.clock ?? defaultClock;
-  const factory = input.requestFactory ?? defaultRequestFactory;
+  if (!Number.isSafeInteger(input.overallDeadlineMs) || input.overallDeadlineMs <= 0 || input.overallDeadlineMs > MAX_OVERALL_DEADLINE_MS) throw new Error("INVALID_OVERALL_DEADLINE");
+  const clock = input.clock;
+  const factory = input.requestFactory;
   const startedWall = clock.nowWall();
   const startedMono = clock.nowMonotonic();
   const options: OpenSeaTransportRequestOptions = { hostname: HOST, protocol: "https:", method: "GET", path: safePath(input.context), headers: { Accept: "application/json", "X-API-KEY": input.apiKey } };
@@ -44,8 +46,10 @@ export function executeOpenSeaExactOrderRequest(input: { readonly context: Targe
     let settled = false;
     let request: TransportRequest | null = null;
     let timer: unknown;
-    const settle = (raw: OpenSeaExactOrderRawInput) => { if (settled) return; settled = true; if (timer !== undefined) clock.clearTimeout(timer); resolve(adaptOpenSeaExactOrder(raw)); };
-    const timeout = () => { if (settled) return; try { request?.destroy?.(); } finally { settle({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" }); } };
+    const claim = (): boolean => { if (settled) return false; settled = true; if (timer !== undefined) clock.clearTimeout(timer); return true; };
+    const finish = (raw: OpenSeaExactOrderRawInput, cancel?: () => void): void => { if (!claim()) return; try { cancel?.(); } finally { resolve(adaptOpenSeaExactOrder(raw)); } };
+    const elapsed = () => Number((clock.nowMonotonic() - startedMono) / 1000000n);
+    const timeout = () => finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" }, () => request?.destroy?.());
     timer = clock.setTimeout(timeout, input.overallDeadlineMs);
     try {
       request = factory(options, (response) => {
@@ -53,26 +57,37 @@ export function executeOpenSeaExactOrderRequest(input: { readonly context: Targe
         const status = typeof response.statusCode === "number" ? response.statusCode : null;
         const headers = rawHeaders(response.rawHeaders);
         const headersWall = clock.nowWall();
+        if (elapsed() > input.overallDeadlineMs) { finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" }, () => { response.destroy?.(); request?.destroy?.(); }); return; }
         if (status !== 200) {
-          try { response.destroy?.(); } finally { settle({ context: input.context, httpStatus: status, body: null, headers, transportOutcome: "HTTP" }); }
+          finish({ context: input.context, httpStatus: status, body: null, headers, transportOutcome: "HTTP" }, () => response.destroy?.());
           return;
         }
         const buffer = new Uint8Array(ONE_MIB + 1);
         let size = 0;
         response.on("data", (chunk: unknown) => {
           if (settled) return;
-          if (!(chunk instanceof Uint8Array)) { try { response.destroy?.(); } finally { settle({ context: input.context, httpStatus: 200, body: null, headers, transportOutcome: "HTTP" }); } return; }
+          if (!(chunk instanceof Uint8Array)) { finish({ context: input.context, httpStatus: 200, body: null, headers, transportOutcome: "HTTP" }, () => response.destroy?.()); return; }
           const remaining = ONE_MIB + 1 - size;
           if (remaining <= 0) return;
           const copyLength = Math.min(remaining, chunk.byteLength);
           buffer.set(chunk.subarray(0, copyLength), size); size += copyLength;
-          if (size >= ONE_MIB + 1) { try { response.destroy?.(); } finally { settle({ context: input.context, httpStatus: 200, body: buffer, headers, transportOutcome: "HTTP" }); } }
+          if (size >= ONE_MIB + 1) finish({ context: input.context, httpStatus: 200, body: buffer, headers, transportOutcome: "HTTP" }, () => response.destroy?.());
         });
-        response.on("end", () => { if (settled) return; settle({ context: input.context, httpStatus: 200, body: buffer.slice(0, size), headers, timing: timing(clock, startedWall, startedMono, input.overallDeadlineMs, headersWall, clock.nowWall()), transportOutcome: "HTTP" }); });
-        response.on("error", () => { if (!settled) settle({ context: input.context, httpStatus: 200, body: null, headers, transportOutcome: "CONNECTION_RESET" }); });
+        response.on("end", () => { if (settled) return; if (elapsed() > input.overallDeadlineMs) { finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" }, () => { response.destroy?.(); request?.destroy?.(); }); return; } finish({ context: input.context, httpStatus: 200, body: buffer.slice(0, size), headers, timing: timing(clock, startedWall, startedMono, input.overallDeadlineMs, headersWall, clock.nowWall()), transportOutcome: "HTTP" }); });
+        response.on("error", () => { finish({ context: input.context, httpStatus: 200, body: null, headers, transportOutcome: "CONNECTION_RESET" }); });
       });
-      request.on("error", () => { if (!settled) settle({ context: input.context, httpStatus: null, body: null, transportOutcome: "CONNECTION_RESET" }); });
+      request.on("error", () => finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "CONNECTION_RESET" }));
       request.end();
-    } catch { if (!settled) settle({ context: input.context, httpStatus: null, body: null, transportOutcome: "CONNECTION_RESET" }); }
+    } catch { finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "CONNECTION_RESET" }); }
   });
+}
+
+/** Production API: dependencies are module-owned; callers supply no network implementation or clock. */
+export function executeOpenSeaExactOrderRequest(input: { readonly context: TargetedVerifierContext; readonly apiKey: string; readonly overallDeadlineMs: number; }): Promise<OpenSeaExactOrderObservationV1> {
+  return executeCore({ ...input, requestFactory: defaultRequestFactory, clock: defaultClock });
+}
+
+/** @internal test-only seam; never use as the production transport entry point. */
+export function __executeOpenSeaExactOrderRequestForTest(input: { readonly context: TargetedVerifierContext; readonly apiKey: string; readonly overallDeadlineMs: number; readonly requestFactory: OpenSeaRequestFactory; readonly clock: OpenSeaTransportClock; }): Promise<OpenSeaExactOrderObservationV1> {
+  return executeCore(input);
 }

@@ -18,10 +18,16 @@ function raw(extra: Record<string, unknown>) {
   return { context, httpStatus: 200, body: orderBody, headers: validHeaders, timing, ...extra } as any;
 }
 
-test("audit reproducer: Symbol httpStatus throws before fail-closed classification", () => {
-  assert.throws(() => adaptOpenSeaExactOrder(raw({ httpStatus: Symbol("status") })));
+test("Task-37 Symbol httpStatus reproducer now fails closed", () => {
+  const observation = adaptOpenSeaExactOrder(raw({ httpStatus: Symbol("status") }));
+  assert.equal(observation.outcome, "MALFORMED");
+  assert.ok(observation.reasonCodes.includes("HTTP_STATUS_OR_BODY_UNPROVEN"));
+  assert.equal(observation.httpStatus, null);
 });
 
-test("audit reproducer: Symbol body throws while constructing bytes", () => {
-  assert.throws(() => adaptOpenSeaExactOrder(raw({ body: Symbol("body") })));
+test("Task-37 Symbol body reproducer now fails closed", () => {
+  const observation = adaptOpenSeaExactOrder(raw({ body: Symbol("body") }));
+  assert.equal(observation.outcome, "MALFORMED");
+  assert.ok(observation.reasonCodes.includes("HTTP_STATUS_OR_BODY_UNPROVEN"));
+  assert.equal(observation.responseBodySha256, null);
 });

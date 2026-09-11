@@ -67,6 +67,42 @@ test("malformed non-200 body cannot override status classification", () => {
   assert.deepEqual(observation.reasonCodes, ["HTTP_503"]);
 });
 
+test("malformed raw metadata fails closed without leaking invalid fields", () => {
+  for (const extra of [
+    { transportOutcome: Symbol("transport") }, { transportOutcome: "UNKNOWN" },
+    { transportOutcome: 1 }, { transportOutcome: {} },
+    { httpStatus: "200" }, { httpStatus: NaN }, { httpStatus: Infinity },
+    { httpStatus: 200.5 }, { httpStatus: 99 }, { httpStatus: 600 },
+    { body: "bytes" }, { body: 1 }, { body: false }, { body: 1n },
+    { body: {} }, { body: [] }, { body: new ArrayBuffer(1) }, { body: new DataView(new ArrayBuffer(1)) },
+    { responseBodySha256: Symbol("hash") }, { rawResponseArtifactHash: Symbol("artifact") },
+    { timing: Symbol("timing") }, { timing: "timing" }, { timing: 1 }, { timing: [] }, { timing: null }, { timing: {} },
+  ]) {
+    const observation = adaptOpenSeaExactOrder(input(extra));
+    assert.notEqual(observation.outcome, "VALID");
+    assert.equal(observation.supportedListing, false);
+    assert.equal(observation.temporalProof, "UNTRUSTED");
+    assert.equal(observation.authorityGranted, false);
+    assert.equal(observation.deactivationAuthorityGranted, false);
+    assert.equal(observation.httpStatus === null || (typeof observation.httpStatus === "number" && Number.isInteger(observation.httpStatus)), true);
+    assert.equal(observation.transportOutcome === "HTTP" || observation.transportOutcome === "TIMEOUT" || observation.transportOutcome === "CONNECTION_RESET", true);
+    assert.equal(observation.timing === null || typeof observation.timing === "object", true);
+  }
+});
+
+test("critical non-200 statuses remain classified with a Symbol body", () => {
+  for (const [httpStatus, outcome, reason] of [[503, "TRANSPORT_FAILED", "HTTP_503"], [404, "UNKNOWN", "HTTP_404_NOT_STATE_PROOF"], [429, "RATE_LIMITED", "HTTP_429"]] as const) {
+    const observation = adaptOpenSeaExactOrder(input({ httpStatus, body: Symbol("body") }));
+    assert.equal(observation.outcome, outcome);
+    assert.deepEqual(observation.reasonCodes, [reason]);
+  }
+  for (const transportOutcome of ["TIMEOUT", "CONNECTION_RESET"] as const) {
+    const observation = adaptOpenSeaExactOrder(input({ transportOutcome, body: Symbol("body") }));
+    assert.equal(observation.outcome, "TRANSPORT_FAILED");
+    assert.ok(observation.reasonCodes.includes(transportOutcome === "TIMEOUT" ? "REQUEST_TIMEOUT" : "CONNECTION_RESET"));
+  }
+});
+
 test("malformed runtime header name fails closed before header lookup", () => {
   const observation = adaptOpenSeaExactOrder(input({ headers: [{ name: null, value: "application/json" }] }));
   assert.equal(observation.outcome, "MALFORMED");

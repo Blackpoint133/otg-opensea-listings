@@ -11,9 +11,8 @@ const graph = await makeTrustedContexts();
 const context = graph.contexts[0];
 after(async () => disposeTrustedContexts(graph.root));
 test("task24 official schema pin is reproducible", async () => {
-  const text = await readFile(new URL("./fixtures/opensea_get_order_schema_pin.json", import.meta.url), "utf8");
-  const canonical = JSON.stringify(JSON.parse(text));
-  const digest = createHash("sha256").update(Buffer.from(canonical, "utf8")).digest("hex");
+  const bytes = await readFile(new URL("./fixtures/opensea_get_order_schema_2026-09-11_f9b79429.json", import.meta.url));
+  const digest = createHash("sha256").update(bytes).digest("hex");
   assert.equal(digest, GET_ORDER_SCHEMA_SHA256);
   assert.match(OPENAPI_DOCUMENT_SHA256, /^[0-9a-f]{64}$/);
   assert.equal(GET_ORDER_OPERATION_ID, "get_order");
@@ -40,7 +39,7 @@ function body(overrides: Record<string, unknown> = {}) {
     protocol_address: context.protocolAddress,
     status: "ACTIVE",
     type: "basic",
-    price: {},
+    price: { current: { currency: "ETH", decimals: 18, value: "1" } },
     asset: { contract, identifier: context.expectedIdentity.tokenId },
     remaining_quantity: 1,
     protocol_data: { parameters: {

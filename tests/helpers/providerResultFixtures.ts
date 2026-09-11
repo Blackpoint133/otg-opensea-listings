@@ -17,7 +17,7 @@ export function providerFixture(input: {
             if (order && typeof order === "object" && !Array.isArray(order) && !("order" in order)) {
                 const p = order.protocol_data?.parameters;
                 if (p && typeof p === "object") {
-                    order.price ??= {};
+                    order.price ??= { current: { currency: "ETH", decimals: 18, value: "1" } };
                     order.type ??= "basic";
                     p.offerer ??= "0x" + "2".repeat(40);
                     p.consideration ??= [{ itemType: 2, token: order.asset?.contract, identifierOrCriteria: order.asset?.identifier, startAmount: "1", endAmount: "1", recipient: "0x" + "2".repeat(40) }];

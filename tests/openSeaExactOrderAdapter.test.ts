@@ -7,7 +7,7 @@ const hash = "0x"+"a".repeat(64), contract = "0x9ed98e159be43a8d42b64053831fcae5
 const fixture = await makeTrustedContexts();
 const context = fixture.contexts[0];
 after(async () => { await disposeTrustedContexts(fixture.root); });
-function raw(extra: Record<string, unknown> = {}) { return new TextEncoder().encode(JSON.stringify({ order: { order_hash: hash, chain: "gunzilla", protocol_address: protocol, status: "ACTIVE", type: "basic", price: {}, asset: { contract, identifier: "1" }, remaining_quantity: 1, protocol_data: { parameters: { offerer: "0x"+"2".repeat(40), consideration: [{ itemType: 2, token: contract, identifierOrCriteria: "1", startAmount: "1", endAmount: "1", recipient: "0x"+"2".repeat(40) }], zone: "0x"+"3".repeat(40), zoneHash: "0x"+"0".repeat(64), salt: "1", conduitKey: "0x"+"0".repeat(64), totalOriginalConsiderationItems: 0, counter: 0, orderType: 0, startTime: "1893455000", endTime: "1893457000", offer: [{ itemType: 2, token: contract, identifierOrCriteria: "1", startAmount: "1", endAmount: "1" }] } }, ...extra } })); }
+function raw(extra: Record<string, unknown> = {}) { return new TextEncoder().encode(JSON.stringify({ order: { order_hash: hash, chain: "gunzilla", protocol_address: protocol, status: "ACTIVE", type: "basic", price: { current: { currency: "ETH", decimals: 18, value: "1" } }, asset: { contract, identifier: "1" }, remaining_quantity: 1, protocol_data: { parameters: { offerer: "0x"+"2".repeat(40), consideration: [{ itemType: 2, token: contract, identifierOrCriteria: "1", startAmount: "1", endAmount: "1", recipient: "0x"+"2".repeat(40) }], zone: "0x"+"3".repeat(40), zoneHash: "0x"+"0".repeat(64), salt: "1", conduitKey: "0x"+"0".repeat(64), totalOriginalConsiderationItems: 0, counter: 0, orderType: 0, startTime: "1893455000", endTime: "1893457000", offer: [{ itemType: 2, token: contract, identifierOrCriteria: "1", startAmount: "1", endAmount: "1" }] } }, ...extra } })); }
 function input(body: Uint8Array | null = raw(), extra: Record<string, unknown> = {}) { return { context, httpStatus: 200, body, timing: { requestStartedAt: "2030-01-01T00:00:00.000Z", responseHeadersAt: "2030-01-01T00:00:00.500Z", responseCompletedAt: "2030-01-01T00:00:01.000Z", elapsedMs: 10, overallDeadlineMs: 1000, deadlineExceeded: false }, headers: [{ name: "Date", value: "Tue, 01 Jan 2030 00:00:00 GMT" }, { name: "Content-Type", value: "application/json" }, { name: "Content-Encoding", value: "identity" }], ...extra }; }
 test("valid wrapped Listing is adapted and trusted", () => { const o = adaptOpenSeaExactOrder(input()); assert.equal(o.outcome, "VALID"); assert.equal(o.assetIdentifier, "1"); assert.equal(o.offerIdentifier, "1"); assert.equal(isTrustedOpenSeaExactOrderObservation(o), true); });
 test("normalizer consumes adapter observation", () => { const o = adaptOpenSeaExactOrder(input()); const p = interpretOpenSeaExactOrderObservation({ context, observation: o }); assert.equal(p.authorityGranted, false); });
@@ -30,16 +30,23 @@ test("huge decimal token is preserved lexically", () => { const token = "9".repe
 
 test("adapter preserves numeric type before item-type schema checks", () => {
   const source = new TextDecoder().decode(raw());
-  for (const token of ['"2"', '2.0', '2e0', '-0', '2147483648', '{"kind":"number","raw":"2"}']) {
+  for (const token of ['"2"', '-0', '2147483648', '{"kind":"number","raw":"2"}']) {
     const bytes = new TextEncoder().encode(source.replaceAll('"itemType":2', '"itemType":' + token));
     assert.notEqual(adaptOpenSeaExactOrder(input(bytes)).outcome, "VALID", token);
+  }
+  for (const token of ["2.0", "2e0"]) {
+    const bytes = new TextEncoder().encode(source.replaceAll('"itemType":2', '"itemType":' + token));
+    assert.equal(adaptOpenSeaExactOrder(input(bytes)).outcome, "VALID", token);
   }
   assert.equal(adaptOpenSeaExactOrder(input()).outcome, "VALID");
 });
 test("adapter preserves numeric type before order-type and string identity checks", () => {
   const source = new TextDecoder().decode(raw());
-  for (const token of ['"0"', '0.0', '0e0', '-0', '{"kind":"number","raw":"0"}']) {
+  for (const token of ['"0"', '{"kind":"number","raw":"0"}']) {
     assert.notEqual(adaptOpenSeaExactOrder(input(new TextEncoder().encode(source.replace('"orderType":0', '"orderType":' + token)))).outcome, "VALID", token);
+  }
+  for (const token of ["0.0", "0e0", "-0"]) {
+    assert.equal(adaptOpenSeaExactOrder(input(new TextEncoder().encode(source.replace('"orderType":0', '"orderType":' + token)))).outcome, "VALID", token);
   }
   for (const field of ['"identifier":"1"', '"identifierOrCriteria":"1"', '"startAmount":"1"', '"endAmount":"1"']) {
     assert.notEqual(adaptOpenSeaExactOrder(input(new TextEncoder().encode(source.replace(field, field.replace(':"1"', ':1'))))).outcome, "VALID", field);

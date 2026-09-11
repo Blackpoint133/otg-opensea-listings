@@ -19,7 +19,7 @@ function canonicalOrder(status = "ACTIVE"): Record<string, any> {
     protocol_address: context.protocolAddress,
     status,
     type: "basic",
-    price: {},
+    price: { current: { currency: "ETH", decimals: 18, value: "1" } },
     asset: { contract, identifier: token },
     remaining_quantity: 1,
     protocol_data: { parameters: {

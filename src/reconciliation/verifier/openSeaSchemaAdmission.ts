@@ -86,7 +86,16 @@ function parameters(value: LosslessJsonValue): boolean {
 function protocolData(value: LosslessJsonValue): boolean {
   if (!isJsonObject(value)) return false;
   const object = value as Record<string, LosslessJsonValue>;
-  return own(object, "parameters") && parameters(object.parameters);
+  return own(object, "parameters") && parameters(object.parameters) &&
+    (!own(object, "signature") || stringField(object, "signature"));
+}
+
+function svmOrder(value: LosslessJsonValue): boolean {
+  if (!isJsonObject(value)) return false;
+  const object = value as Record<string, LosslessJsonValue>;
+  for (const key of ["creation_signature", "id", "maker", "order_state"])
+    if (!stringField(object, key)) return false;
+  return !own(object, "asset_id") || stringField(object, "asset_id");
 }
 
 function asset(value: LosslessJsonValue): boolean {
@@ -106,5 +115,8 @@ export function validateOfficialListingRequired(order: Record<string, LosslessJs
   if (own(order, "protocol_address") && !stringField(order, "protocol_address")) return false;
   if (own(order, "protocol_data") && !protocolData(order.protocol_data)) return false;
   if (own(order, "asset") && !asset(order.asset)) return false;
+  if (own(order, "order_created_at") && officialJsonInt64Value(order.order_created_at) === null) return false;
+  if (own(order, "protocol") && !stringField(order, "protocol")) return false;
+  if (own(order, "svm_order") && !svmOrder(order.svm_order)) return false;
   return true;
 }

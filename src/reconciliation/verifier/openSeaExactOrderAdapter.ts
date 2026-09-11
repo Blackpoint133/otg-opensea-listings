@@ -6,7 +6,7 @@ import { OPENSEA_ORDER_CONTRACT_VERSION, type TargetedVerifierContext, type Tran
 import { OPENAPI_DOCUMENT_SHA256, GET_ORDER_SCHEMA_SHA256 } from "./openSeaExactOrderContract.js";
 import { isJsonObject, jsonString, parseLosslessJson, type LosslessJsonValue } from "./losslessJson.js";
 import { officialJsonInt32Value, officialJsonInt64Value, validateOfficialListingRequired } from "./openSeaSchemaAdmission.js";
-export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v6-2026-09" as const;
+export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v7-2026-09" as const;
 export type OpenSeaTemporalProof = "ACTIVE_WINDOW_CONFIRMED" | "EXPIRED_WINDOW_CONFIRMED" | "TRUSTED_OBSERVATION" | "UNTRUSTED";
 export interface OpenSeaTimingEvidence { readonly requestStartedAt:string; readonly responseHeadersAt:string; readonly responseCompletedAt:string; readonly elapsedMs:number; readonly overallDeadlineMs:number; readonly deadlineExceeded:boolean; }
 export interface OpenSeaExactOrderRawInput { readonly context:TargetedVerifierContext; readonly httpStatus:number|null; readonly body:Uint8Array|null; readonly responseBodySha256?:string|null; readonly rawResponseArtifactHash?:string|null; readonly headers?:readonly {readonly name:string;readonly value:string}[]; readonly timing?:OpenSeaTimingEvidence; readonly transportOutcome?:TransportOutcome; }

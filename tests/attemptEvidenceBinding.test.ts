@@ -12,4 +12,4 @@ test("barrier commitment changes id",()=>assert.notEqual(attemptIdentity(context
 test("root commitment changes id",()=>assert.notEqual(attemptIdentity(context,0),attemptIdentity({...context,generationRootHash:"d".repeat(64)} as any,0)));
 test("wire identity excludes token",()=>assert.equal(context.orderHash,(context.expectedIdentity as any).orderHash));
 test("schema v4 is explicit",()=>assert.match(TARGETED_VERIFIER_SCHEMA_VERSION,/v4$/));
-test("policy v7 is explicit",()=>assert.equal(TARGETED_VERIFIER_POLICY_VERSION,"targeted-verifier-policy-v7-2026-09"));
+test("policy v8 is explicit",()=>assert.equal(TARGETED_VERIFIER_POLICY_VERSION,"targeted-verifier-policy-v8-2026-09"));

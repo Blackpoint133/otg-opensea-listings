@@ -72,7 +72,7 @@ export function interpretOpenSeaExactOrderObservation(input: {
         return base({ context: input.context, httpStatus: null, observedAt: null }, "PROVENANCE_MISMATCH", ["HTTP_STATUS_OR_BODY_UNPROVEN"]);
     if (observation.outcome === "TRANSPORT_FAILED")
         return base({ context: input.context, httpStatus: observation.httpStatus, observedAt: null, transportOutcome: observation.transportOutcome }, "TRANSPORT_FAILED", [observation.transportOutcome === "HTTP" ? "HTTP_500" : observation.transportOutcome === "TIMEOUT" ? "REQUEST_TIMEOUT" : "CONNECTION_RESET"], null, null, observation.responseBodySha256);
-    const adapterReasons = new Set(["CONTENT_TYPE_UNSUPPORTED", "CONTENT_LENGTH_INVALID", "BODY_TOO_LARGE", "UNSUPPORTED_CONTENT_ENCODING", "RAW_RESPONSE_HASH_MISMATCH", "RAW_RESPONSE_ARTIFACT_HASH_INVALID", "UNTRUSTED_TARGETED_VERIFIER_CONTEXT"]);
+    const adapterReasons = new Set(["CONTENT_TYPE_UNSUPPORTED", "CONTENT_LENGTH_INVALID", "BODY_TOO_LARGE", "UNSUPPORTED_CONTENT_ENCODING", "RAW_RESPONSE_HASH_MISMATCH", "RAW_RESPONSE_ARTIFACT_HASH_INVALID", "UNTRUSTED_TARGETED_VERIFIER_CONTEXT", "HEADER_INVALID"]);
     const mappedReasons = observation.reasonCodes.map((r) => adapterReasons.has(r) ? (r === "RAW_RESPONSE_ARTIFACT_HASH_INVALID" ? "RAW_RESPONSE_ARTIFACT_HASH_INVALID" : "MALFORMED_JSON") : r).filter((r) => RESULT_REASONS.has(r));
     if (observation.outcome !== "VALID" || observation.providerStatus === null)
         return base({ context: input.context, httpStatus: observation.httpStatus, observedAt: observation.observedAt }, observation.outcome === "RATE_LIMITED" ? "RATE_LIMITED" : observation.outcome === "AMBIGUOUS" ? "AMBIGUOUS" : observation.outcome === "UNKNOWN" ? "UNKNOWN" : observation.outcome === "MALFORMED" ? "MALFORMED_RESPONSE" : "UNSUPPORTED", mappedReasons.length ? mappedReasons : ["HTTP_STATUS_OR_BODY_UNPROVEN"], null, null, observation.responseBodySha256);
@@ -81,13 +81,13 @@ export function interpretOpenSeaExactOrderObservation(input: {
     if (observation.providerStatus === "ACTIVE") {
         if (observation.remainingQuantity === null || BigInt(observation.remainingQuantity) <= 0n)
             return base(mapped, "UNKNOWN", ["ACTIVE_QUANTITY_UNPROVEN"], "ACTIVE", normalized, observation.responseBodySha256);
-        if (observation.remainingQuantity === null || observation.startTime === null || observation.endTime === null || !isIso(observation.observedAt))
+        if (observation.temporalProof !== "ACTIVE_WINDOW_CONFIRMED" || observation.startTime === null || observation.endTime === null || !isIso(observation.observedAt))
             return base(mapped, "UNKNOWN", ["ACTIVE_TIME_UNPROVEN"], "ACTIVE", normalized, observation.responseBodySha256);
         return base(mapped, "ACTIVE_CONFIRMED", [], "ACTIVE", normalized, observation.responseBodySha256);
     }
     if (observation.providerStatus === "INACTIVE")
-        return base(mapped, "INACTIVE_CONFIRMED", [], "INACTIVE", normalized, observation.responseBodySha256);
+        return observation.temporalProof === "TRUSTED_OBSERVATION" ? base(mapped, "INACTIVE_CONFIRMED", [], "INACTIVE", normalized, observation.responseBodySha256) : base(mapped, "UNKNOWN", ["OBSERVATION_TIME_INVALID"], "INACTIVE", normalized, observation.responseBodySha256);
     if (observation.providerStatus === "FULFILLED" || observation.providerStatus === "CANCELLED")
-        return base(mapped, "TERMINAL_CONFIRMED", [], observation.providerStatus as ProviderStatus, normalized, observation.responseBodySha256);
-    return base(mapped, "EXPIRED_CONFIRMED", [], "EXPIRED", normalized, observation.responseBodySha256);
+        return observation.temporalProof === "TRUSTED_OBSERVATION" ? base(mapped, "TERMINAL_CONFIRMED", [], observation.providerStatus as ProviderStatus, normalized, observation.responseBodySha256) : base(mapped, "UNKNOWN", ["OBSERVATION_TIME_INVALID"], observation.providerStatus as ProviderStatus, normalized, observation.responseBodySha256);
+    return observation.temporalProof === "EXPIRED_WINDOW_CONFIRMED" ? base(mapped, "EXPIRED_CONFIRMED", [], "EXPIRED", normalized, observation.responseBodySha256) : base(mapped, "UNKNOWN", ["OBSERVATION_TIME_INVALID"], "EXPIRED", normalized, observation.responseBodySha256);
 }

@@ -5,6 +5,7 @@ export type LosslessNumber = Readonly<{
 export type LosslessValue = null | boolean | string | LosslessNumber | LosslessValue[] | {
     readonly [key: string]: LosslessValue;
 };
+export type LosslessJsonValue = LosslessValue;
 export const MAX_JSON_DEPTH = 64;
 export const MAX_OBJECT_MEMBERS = 512;
 export const MAX_ARRAY_ELEMENTS = 512;
@@ -23,6 +24,13 @@ export function jsonInt32(value: unknown): number | null {
     if (!isJsonNumber(value) || !/^(0|[1-9][0-9]*)$/.test(value.raw) || BigInt(value.raw) > 2147483647n)
         return null;
     return Number(value.raw);
+}
+export function jsonString(value: unknown): string | null {
+    return typeof value === "string" ? value : null;
+}
+export function jsonIntegerToken(value: unknown): bigint | null {
+    if (!isJsonNumber(value) || !/^(0|[1-9][0-9]*)$/.test(value.raw)) return null;
+    try { return BigInt(value.raw); } catch { return null; }
 }
 export function parseLosslessJson(text: string): LosslessValue {
     if (typeof text !== "string" || text.length > MAX_JSON_CHARACTERS)

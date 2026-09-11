@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { adaptOpenSeaExactOrder, isTrustedOpenSeaExactOrderObservation } from "../src/reconciliation/verifier/openSeaExactOrderAdapter.js";
 import { interpretOpenSeaExactOrderObservation } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
-import { makeContexts } from "./providerFenceRuntimeCrosspair.test.js";
+import { makeTrustedContexts, disposeTrustedContexts } from "./helpers/trustedVerifierContexts.js";
 const hash = "0x"+"a".repeat(64), contract = "0x9ed98e159be43a8d42b64053831fcae5e4d7d271", protocol = "0x"+"1".repeat(40);
-const fixture = await makeContexts();
+const fixture = await makeTrustedContexts();
 const context = fixture.contexts[0];
-after(async () => { const { rm } = await import("node:fs/promises"); await rm(fixture.root, { recursive: true, force: true }); });
+after(async () => { await disposeTrustedContexts(fixture.root); });
 function raw(extra: Record<string, unknown> = {}) { return new TextEncoder().encode(JSON.stringify({ order: { order_hash: hash, chain: "gunzilla", protocol_address: protocol, status: "ACTIVE", asset: { contract, identifier: "1" }, remaining_quantity: "1", protocol_data: { parameters: { order_type: 0, start_time: "1893455000", end_time: "1893457000", offer: [{ item_type: 2, token: contract, identifier_or_criteria: "1", start_amount: "1", end_amount: "1" }] } }, ...extra } })); }
 function input(body: Uint8Array | null = raw(), extra: Record<string, unknown> = {}) { return { context, httpStatus: 200, body, requestStartedAt: "2030-01-01T00:00:00.000Z", responseHeadersAt: "2030-01-01T00:00:00.500Z", responseCompletedAt: "2030-01-01T00:00:01.000Z", headers: [{ name: "Date", value: "Tue, 01 Jan 2030 00:00:00 GMT" }, { name: "Content-Type", value: "application/json" }, { name: "Content-Encoding", value: "identity" }], ...extra }; }
 test("valid wrapped Listing is adapted and trusted", () => { const o = adaptOpenSeaExactOrder(input()); assert.equal(o.outcome, "VALID"); assert.equal(o.assetIdentifier, "1"); assert.equal(o.offerIdentifier, "1"); assert.equal(isTrustedOpenSeaExactOrderObservation(o), true); });

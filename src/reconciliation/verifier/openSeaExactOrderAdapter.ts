@@ -5,7 +5,7 @@ import type { TargetedVerifierContext, TransportOutcome } from "./targetedVerifi
 import { isCanonicalAddress, isCanonicalOrderHash, isCanonicalHash, isDecimal } from "./targetedVerifierPolicy.js";
 import { isTrustedTargetedVerifierContext } from "./targetedVerifierContext.js";
 
-export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v1-2026-09" as const;
+export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v2-2026-09" as const;
 
 export interface OpenSeaExactOrderRawInput {
   readonly context: TargetedVerifierContext;
@@ -107,6 +107,8 @@ export function adaptOpenSeaExactOrder(input: OpenSeaExactOrderRawInput): OpenSe
   const documentedStatus = new Set(["ACTIVE", "INACTIVE", "FULFILLED", "CANCELLED", "EXPIRED"]);
   const startTime = typeof params?.start_time === "string" && isDecimal(params.start_time) ? params.start_time : null; const endTime = typeof params?.end_time === "string" && isDecimal(params.end_time) ? params.end_time : null;
   const intervalInside = observedAt !== null && startTime !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(startTime) * 1000n && BigInt(dateMs + 1000) < BigInt(endTime) * 1000n;
-  const listing = validIds && itemType === 2 && offer[0]?.token === input.context.contractAddress && offer[0]?.start_amount === "1" && offer[0]?.end_amount === "1" && (params?.order_type === 0 || params?.order_type === "FULL_OPEN") && typeof order.status === "string" && documentedStatus.has(order.status) && intervalInside;
+  const expiredProof = observedAt !== null && endTime !== null && BigInt(dateMs - 1000) >= BigInt(endTime) * 1000n;
+  const temporalProof = order.status === "ACTIVE" ? intervalInside : order.status === "EXPIRED" ? expiredProof : observedAt !== null;
+  const listing = validIds && itemType === 2 && offer[0]?.token === input.context.contractAddress && offer[0]?.start_amount === "1" && offer[0]?.end_amount === "1" && (params?.order_type === 0 || params?.order_type === "FULL_OPEN") && typeof order.status === "string" && documentedStatus.has(order.status) && temporalProof;
   return failure(input, listing ? "VALID" : "UNSUPPORTED", listing ? [] : ["UNSUPPORTED_ORDER_SHAPE"], { providerStatus: typeof order.status === "string" ? order.status : null, orderHash, chain, protocolAddress: protocol, contractAddress: contract, assetIdentifier: typeof assetId === "string" ? assetId : null, offerIdentifier: typeof offerId === "string" ? offerId : null, remainingQuantity: typeof order.remaining_quantity === "string" && isDecimal(order.remaining_quantity) ? order.remaining_quantity : null, startTime, endTime, itemType: typeof itemType === "number" ? itemType : null, orderType: params?.order_type ?? null, supportedListing: listing, observedAt, observationLowerBound, observationUpperBound });
 }

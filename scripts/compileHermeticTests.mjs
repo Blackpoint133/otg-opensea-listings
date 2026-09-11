@@ -23,6 +23,9 @@ for (const file of files) {
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, transpiled.outputText.replace(/(\bfrom\s+["'][^"']+)\.ts(["'])/g, "$1.js$2").replace(/(\bimport\(["'][^"']+)\.ts(["']\))/g, "$1.js$2"), "utf8");
 }
+for (const file of (await (async function walkHelpers(dir) { const out = []; for (const entry of await readdir(dir, { withFileTypes: true })) { const full = join(dir, entry.name); if (entry.isDirectory()) out.push(...await walkHelpers(full)); else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) out.push(full); } return out; })(source)).sort()) {
+  const relative = file.slice(source.length + 1).replace(/\.ts$/i, ".js"); const target = join(output, relative); const input = await readFile(file, "utf8"); const transpiled = ts.transpileModule(input, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, esModuleInterop: true, sourceMap: false }, fileName: file }); await mkdir(dirname(target), { recursive: true }); await writeFile(target, transpiled.outputText.replace(/(\bfrom\s+["'][^"']+)\.ts(["'])/g, "$1.js$2"), "utf8");
+}
 async function walkScripts(dir) {
   const result = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {

@@ -35,13 +35,13 @@ export async function makeContexts() {
   for (const hash of [HASH_A, HASH_B]) contexts.push(deriveTargetedVerifierContext(await reconstructIntegratedEvidence(writer, sweep, PROVENANCE), hash, { preVerification: { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], hash) } }));
   return { root, contexts };
 }
-function body(hash: string, token: string, status = "ACTIVE") { return JSON.stringify({ order_hash: hash, chain: "gunzilla", protocol_address: PROTOCOL, asset: { contract: CONTRACT, identifier: token }, status, remaining_quantity: "1", protocol_data: { parameters: { startTime: "1700000000", endTime: "2000000000" } } }); }
+function body(hash: string, token: string, status = "ACTIVE") { return JSON.stringify({ order_hash: hash, chain: "gunzilla", protocol_address: PROTOCOL, asset: { contract: CONTRACT, identifier: token }, status, type: "basic", price: {}, remaining_quantity: 1, protocol_data: { parameters: { offerer: "0x" + "2".repeat(40), offer: [{ itemType: 2, token: CONTRACT, identifierOrCriteria: token, startAmount: "1", endAmount: "1" }], consideration: [{ itemType: 2, token: CONTRACT, identifierOrCriteria: token, startAmount: "1", endAmount: "1", recipient: "0x" + "2".repeat(40) }], startTime: "1700000000", endTime: "2000000000", orderType: 0, zone: "0x" + "3".repeat(40), zoneHash: "0x" + "0".repeat(64), salt: "1", conduitKey: "0x" + "0".repeat(64), totalOriginalConsiderationItems: 1, counter: 0 } } }); }
 test("runtime trusted contexts and provider/fence cross-pair matrix", async () => {
   const f = await makeContexts();
   try {
     const [contextA, contextB] = f.contexts; assert.equal(isTrustedTargetedVerifierContext(contextA), true); assert.equal(isTrustedTargetedVerifierContext(contextB), true);
-    const providerA = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1"), observedAt: "2026-01-01T00:00:00.000Z" });
-    const providerB = providerFixture({ context: contextB, httpStatus: 200, rawBody: body(HASH_B, "2"), observedAt: "2026-01-01T00:00:00.000Z" });
+    const providerA = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1"), observedAt: "2026-01-01T00:00:00.000Z", repairShorthand: true });
+    const providerB = providerFixture({ context: contextB, httpStatus: 200, rawBody: body(HASH_B, "2"), observedAt: "2026-01-01T00:00:00.000Z", repairShorthand: true });
     const preA = { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) }, preB = { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_B) };
     const fenceA = applyJournalFence(providerA, preA, preA), fenceB = applyJournalFence(providerB, preB, preB);
     assert.throws(() => buildAttemptEvidence({ context: contextA, attemptNumber: 0, providerResult: providerA, fenceResult: fenceB }), /FENCE_PROVIDER_MISMATCH|FENCE_CONTEXT_ORDER_MISMATCH/);
@@ -63,8 +63,8 @@ test("same trusted context binds distinct provider semantic content", async () =
   const f = await makeContexts();
   try {
     const contextA = f.contexts[0];
-    const providerA1 = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "ACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
-    const providerA2 = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "INACTIVE"), observedAt: "2026-01-01T00:00:00.000Z" });
+    const providerA1 = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "ACTIVE"), observedAt: "2026-01-01T00:00:00.000Z", repairShorthand: true });
+    const providerA2 = providerFixture({ context: contextA, httpStatus: 200, rawBody: body(HASH_A, "1", "INACTIVE"), observedAt: "2026-01-01T00:00:00.000Z", repairShorthand: true });
     assert.equal(validateProviderResult(providerA1), true); assert.equal(validateProviderResult(providerA2), true); assert.notEqual(canonicalEvidence(providerA1), canonicalEvidence(providerA2));
     const pre = { watermark: WATERMARK, relevantOrderFingerprint: eventFingerprint([], HASH_A) };
     const fenceA1 = applyJournalFence(providerA1, pre, pre), fenceA2 = applyJournalFence(providerA2, pre, pre);

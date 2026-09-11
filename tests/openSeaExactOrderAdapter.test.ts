@@ -31,7 +31,7 @@ test("huge decimal token is preserved lexically", () => { const token = "9".repe
 test("adapter preserves numeric type before item-type schema checks", () => {
   const source = new TextDecoder().decode(raw());
   for (const token of ['"2"', '2.0', '2e0', '-0', '2147483648', '{"kind":"number","raw":"2"}']) {
-    const bytes = new TextEncoder().encode(source.replace('"itemType":2', '"itemType":' + token));
+    const bytes = new TextEncoder().encode(source.replaceAll('"itemType":2', '"itemType":' + token));
     assert.notEqual(adaptOpenSeaExactOrder(input(bytes)).outcome, "VALID", token);
   }
   assert.equal(adaptOpenSeaExactOrder(input()).outcome, "VALID");

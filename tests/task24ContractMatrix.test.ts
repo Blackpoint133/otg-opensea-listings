@@ -40,12 +40,13 @@ function body(overrides: Record<string, unknown> = {}) {
     protocol_address: context.protocolAddress,
     status: "ACTIVE",
     type: "basic",
+    price: {},
     asset: { contract, identifier: context.expectedIdentity.tokenId },
     remaining_quantity: 1,
     protocol_data: { parameters: {
       offerer: "0x" + "2".repeat(40),
       offer: [{ itemType: 2, token: contract, identifierOrCriteria: context.expectedIdentity.tokenId, startAmount: "1", endAmount: "1" }],
-      consideration: [], startTime: String(Math.floor(epoch / 1000) - 10), endTime: String(Math.floor(epoch / 1000) + 10),
+      consideration: [{ itemType: 2, token: contract, identifierOrCriteria: context.expectedIdentity.tokenId, startAmount: "1", endAmount: "1", recipient: "0x" + "2".repeat(40) }], startTime: String(Math.floor(epoch / 1000) - 10), endTime: String(Math.floor(epoch / 1000) + 10),
       orderType: 0, zone: "0x" + "3".repeat(40), zoneHash: "0x" + "0".repeat(64), salt: "1", conduitKey: "0x" + "0".repeat(64), totalOriginalConsiderationItems: 0, counter: 0
     } },
     ...overrides
@@ -89,8 +90,8 @@ test("task24 active quantity is fail-closed without an internal exception", () =
   for (const quantity of [0, undefined]) {
     const order = quantity === undefined ? { remaining_quantity: undefined } : { remaining_quantity: quantity };
     const p = result(body(order));
-    assert.equal(p.status, "UNKNOWN");
-    assert.ok(p.reasonCodes.includes("ACTIVE_QUANTITY_UNPROVEN"));
+    assert.equal(p.status, quantity === undefined ? "MALFORMED_RESPONSE" : "UNKNOWN");
+    assert.ok(p.reasonCodes.includes(quantity === undefined ? "OFFICIAL_SCHEMA_INVALID" : "ACTIVE_QUANTITY_UNPROVEN"));
     assert.equal(p.authorityGranted, false);
   }
 });

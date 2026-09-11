@@ -35,10 +35,10 @@ const fixture = await makeTrustedContexts({ tokenId: "7", protocolAddress: PROTO
 const trustedContext = fixture.contexts[0];
 after(() => disposeTrustedContexts(fixture.root));
 function body(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({ order_hash: HASH, chain: TARGETED_VERIFIER_SUPPORTED_CHAIN, protocol_address: PROTOCOL, asset: { contract: TARGETED_VERIFIER_SUPPORTED_CONTRACT, identifier: "7" }, status: "ACTIVE", remaining_quantity: 1, protocol_data: { parameters: { startTime: "1700000000", endTime: "2000000000" } }, ...overrides });
+  return JSON.stringify({ order_hash: HASH, chain: TARGETED_VERIFIER_SUPPORTED_CHAIN, protocol_address: PROTOCOL, asset: { contract: TARGETED_VERIFIER_SUPPORTED_CONTRACT, identifier: "7" }, status: "ACTIVE", type: "basic", price: {}, remaining_quantity: 1, protocol_data: { parameters: { offerer: "0x" + "2".repeat(40), offer: [{ itemType: 2, token: TARGETED_VERIFIER_SUPPORTED_CONTRACT, identifierOrCriteria: "7", startAmount: "1", endAmount: "1" }], consideration: [{ itemType: 2, token: TARGETED_VERIFIER_SUPPORTED_CONTRACT, identifierOrCriteria: "7", startAmount: "1", endAmount: "1", recipient: "0x" + "2".repeat(40) }], startTime: "1700000000", endTime: "2000000000", orderType: 0, zone: "0x" + "3".repeat(40), zoneHash: "0x" + "0".repeat(64), salt: "1", conduitKey: "0x" + "0".repeat(64), totalOriginalConsiderationItems: 1, counter: 0 } }, ...overrides });
 }
 function interpret(rawBody: string, overrides: Partial<Parameters<typeof providerFixture>[0]> = {}) {
-  return providerFixture({ context: trustedContext, httpStatus: 200, rawBody, observedAt: "2026-08-24T10:00:00.000Z", ...overrides });
+  return providerFixture({ context: trustedContext, httpStatus: 200, rawBody, observedAt: "2026-08-24T10:00:00.000Z", repairShorthand: true, ...overrides });
 }
 function completeAttempt(active: ReturnType<typeof interpret>, fence: ReturnType<typeof applyJournalFence>, overrides: Record<string, unknown> = {}) {
   const evidence: any = {

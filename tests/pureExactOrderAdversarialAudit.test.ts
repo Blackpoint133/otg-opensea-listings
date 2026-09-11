@@ -67,6 +67,38 @@ test("malformed non-200 body cannot override status classification", () => {
   assert.deepEqual(observation.reasonCodes, ["HTTP_503"]);
 });
 
-test("malformed runtime header name currently throws before header validation", () => {
-  assert.throws(() => adaptOpenSeaExactOrder(input({ headers: [{ name: null, value: "application/json" }] })));
+test("malformed runtime header name fails closed before header lookup", () => {
+  const observation = adaptOpenSeaExactOrder(input({ headers: [{ name: null, value: "application/json" }] }));
+  assert.equal(observation.outcome, "MALFORMED");
+  assert.deepEqual(observation.reasonCodes, ["HEADER_INVALID"]);
+  assert.equal(observation.supportedListing, false);
+  assert.equal(observation.temporalProof, "UNTRUSTED");
+  assert.equal(observation.authorityGranted, false);
+  assert.equal(observation.deactivationAuthorityGranted, false);
+});
+
+for (const [label, headers] of [
+  ["non-array container", {}], ["string container", "headers"], ["null entry", [null]],
+  ["primitive entry", [1]], ["empty object entry", [{}]], ["numeric name", [{ name: 1, value: "x" }]],
+  ["object name", [{ name: {}, value: "x" }]], ["null value", [{ name: "X-Test", value: null }]],
+  ["numeric value", [{ name: "X-Test", value: 1 }]], ["object value", [{ name: "X-Test", value: {} }]],
+  ["empty name", [{ name: "", value: "x" }]], ["CR value", [{ name: "X-Test", value: "a\r" }]],
+  ["LF value", [{ name: "X-Test", value: "a\n" }]],
+] as const) {
+  test(`malformed header matrix: ${label}`, () => {
+    const observation = adaptOpenSeaExactOrder(input({ headers }));
+    assert.equal(observation.outcome, "MALFORMED");
+    assert.ok(observation.reasonCodes.includes("HEADER_INVALID"));
+    assert.equal(observation.supportedListing, false);
+    assert.equal(observation.temporalProof, "UNTRUSTED");
+    assert.equal(observation.authorityGranted, false);
+    assert.equal(observation.deactivationAuthorityGranted, false);
+  });
+}
+
+test("valid ordered headers preserve normal semantic processing", () => {
+  const observation = adaptOpenSeaExactOrder(input());
+  assert.equal(observation.outcome, "VALID");
+  assert.equal(observation.supportedListing, true);
+  assert.equal(observation.temporalProof, "ACTIVE_WINDOW_CONFIRMED");
 });

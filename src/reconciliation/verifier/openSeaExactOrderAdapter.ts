@@ -5,6 +5,7 @@ import { isCanonicalAddress, isCanonicalHash, isCanonicalOrderHash } from "./tar
 import { OPENSEA_ORDER_CONTRACT_VERSION, type TargetedVerifierContext, type TransportOutcome } from "./targetedVerifierTypes.js";
 import { OPENAPI_DOCUMENT_SHA256, GET_ORDER_SCHEMA_SHA256 } from "./openSeaExactOrderContract.js";
 import { isJsonObject, jsonInt32, jsonIntegerToken, jsonString, parseLosslessJson, type LosslessJsonValue } from "./losslessJson.js";
+import { validateOfficialListingRequired } from "./openSeaSchemaAdmission.js";
 export const OPENSEA_EXACT_ORDER_ADAPTER_VERSION = "opensea-exact-order-adapter-v4-2026-09" as const;
 export type OpenSeaTemporalProof = "ACTIVE_WINDOW_CONFIRMED" | "EXPIRED_WINDOW_CONFIRMED" | "TRUSTED_OBSERVATION" | "UNTRUSTED";
 export interface OpenSeaTimingEvidence { readonly requestStartedAt:string; readonly responseHeadersAt:string; readonly responseCompletedAt:string; readonly elapsedMs:number; readonly overallDeadlineMs:number; readonly deadlineExceeded:boolean; }

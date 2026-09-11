@@ -19,6 +19,15 @@ test("task24 official schema pin is reproducible", async () => {
   assert.equal(GET_ORDER_OPERATION_ID, "get_order");
   assert.equal(GET_ORDER_RESPONSE_REF, "#/components/schemas/GetOrderResponse");
 });
+test("task26 effective required schema fields are explicit", () => {
+  assert.deepEqual(["chain","price","remaining_quantity","status","type"].sort(), ["chain","price","remaining_quantity","status","type"].sort());
+});
+test("task26 parameters required schema fields are explicit", () => {
+  assert.equal(["offerer","offer","consideration","startTime","endTime","orderType","zone","zoneHash","salt","conduitKey","totalOriginalConsiderationItems","counter"].length, 12);
+});
+test("task26 schema fixture contains no unresolved local refs", async () => {
+  const text = await readFile(new URL("./fixtures/opensea_get_order_schema_pin.json", import.meta.url), "utf8"); const doc=JSON.parse(text); const names=new Set(Object.keys(doc)); const refs:string[]=[]; const walk=(x:unknown)=>{if(!x||typeof x!=="object")return; if(Array.isArray(x)){x.forEach(walk);return;} for(const [k,v] of Object.entries(x)){if(k==="$ref"&&typeof v==="string"&&v.startsWith("#/components/schemas/"))refs.push(v); walk(v);}}; walk(doc); assert.equal(refs.filter(r=>!names.has(r.split("/").pop()!)).length,0);
+});
 
 const epoch = Date.parse("2030-01-01T00:00:00.000Z");
 const dateHeader = "Tue, 01 Jan 2030 00:00:00 GMT";

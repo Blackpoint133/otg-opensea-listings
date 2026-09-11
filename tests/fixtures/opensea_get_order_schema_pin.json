@@ -76,6 +76,9 @@
     },
     "required": ["conduitKey", "consideration", "counter", "endTime", "offer", "offerer", "orderType", "salt", "startTime", "totalOriginalConsiderationItems", "zone", "zoneHash"]
   },
+  "ConsiderationItem": { "type": "object", "required": ["itemType", "token", "identifierOrCriteria", "startAmount", "endAmount"], "properties": { "itemType": { "type": "integer" }, "token": { "type": "string" }, "identifierOrCriteria": { "type": "string" }, "startAmount": { "type": "string" }, "endAmount": { "type": "string" } } },
+  "Offer": { "type": "object", "required": ["order_hash", "chain", "protocol_data", "protocol_address", "asset", "remaining_quantity", "status", "type"] },
+  "ListingOrOffer": { "type": "object", "required": ["order_hash", "chain", "protocol_data", "protocol_address", "asset", "remaining_quantity", "status", "type"] },
   "Item": {
     "type": "object",
     "properties": {

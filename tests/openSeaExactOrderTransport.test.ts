@@ -103,6 +103,28 @@ test("monotonic deadline is rechecked at headers and completion", async () => {
   assert.deepEqual(exactResult.reasonCodes, ["HTTP_404_NOT_STATE_PROOF"]);
 });
 
+test("overdue oversized body is TIMEOUT before BODY_TOO_LARGE and pending timer cannot win", async () => {
+  const clock = new FakeClock(); let response!: FakeResponse;
+  const factory: OpenSeaRequestFactory = (_options, callback) => new FakeRequest(() => { response = new FakeResponse(200, rawHeaders, true); callback(response); clock.mono = 2_000_000n; response.emit("data", new Uint8Array(1048577)); });
+  const result = await executeTest({ context, apiKey: "TEST_ONLY_FAKE_OPENSEA_KEY", overallDeadlineMs: 1, requestFactory: factory, clock });
+  assert.deepEqual(result.reasonCodes, ["REQUEST_TIMEOUT"]); assert.equal(result.responseBodySha256, null); assert.equal(response.destroyed, 1); clock.fire(); assert.deepEqual(result.reasonCodes, ["REQUEST_TIMEOUT"]);
+});
+
+test("oversized body exactly at deadline preserves BODY_TOO_LARGE boundary", async () => {
+  const clock = new FakeClock(); let response!: FakeResponse;
+  const factory: OpenSeaRequestFactory = (_options, callback) => new FakeRequest(() => { response = new FakeResponse(200); callback(response); clock.mono = 1_000_000n; response.emit("data", new Uint8Array(1048577)); });
+  const result = await executeTest({ context, apiKey: "TEST_ONLY_FAKE_OPENSEA_KEY", overallDeadlineMs: 1, requestFactory: factory, clock });
+  assert.deepEqual(result.reasonCodes, ["BODY_TOO_LARGE"]); assert.equal(result.responseBodySha256, null);
+});
+
+test("response and request errors after deadline become TIMEOUT, within deadline remain reset", async () => {
+  const responseClock = new FakeClock(); let response!: FakeResponse;
+  const responseFactory: OpenSeaRequestFactory = (_options, callback) => new FakeRequest(() => { response = new FakeResponse(200, rawHeaders, true); callback(response); responseClock.mono = 2_000_000n; response.emit("error", new Error("late")); });
+  const lateResponse = await executeTest({ context, apiKey: "TEST_ONLY_FAKE_OPENSEA_KEY", overallDeadlineMs: 1, requestFactory: responseFactory, clock: responseClock }); assert.deepEqual(lateResponse.reasonCodes, ["REQUEST_TIMEOUT"]);
+  const requestClock = new FakeClock(); const request = new FakeRequest(() => {}, true); const requestFactory: OpenSeaRequestFactory = () => request; const pending = executeTest({ context, apiKey: "TEST_ONLY_FAKE_OPENSEA_KEY", overallDeadlineMs: 1, requestFactory, clock: requestClock }); requestClock.mono = 2_000_000n; request.emit("error", new Error("late")); assert.deepEqual((await pending).reasonCodes, ["REQUEST_TIMEOUT"]);
+  const withinClock = new FakeClock(); const withinRequest = new FakeRequest(() => {}, true); const within = executeTest({ context, apiKey: "TEST_ONLY_FAKE_OPENSEA_KEY", overallDeadlineMs: 10, requestFactory: (() => withinRequest) as any, clock: withinClock }); withinRequest.emit("error", new Error("reset")); assert.deepEqual((await within).reasonCodes, ["CONNECTION_RESET"]);
+});
+
 test("transport performs no redirect or retry", async () => {
   let calls = 0; const response = new FakeResponse(302, ["Location", "https://evil.example/"]); const factory: OpenSeaRequestFactory = (options, callback) => { calls++; return new FakeRequest(() => callback(response)); };
   const observation = await executeTest({ context, apiKey: "TEST_ONLY_FAKE_OPENSEA_KEY", overallDeadlineMs: 1000, requestFactory: factory, clock: new FakeClock() });

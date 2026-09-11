@@ -26,9 +26,8 @@ function rawHeaders(value: readonly string[] | undefined): readonly { readonly n
   for (let index = 0; index < value.length; index += 2) result.push({ name: value[index], value: value[index + 1] });
   return result;
 }
-function timing(clock: OpenSeaTransportClock, startedWall: number, startedMono: bigint, deadline: number, headersWall: number, completedWall: number): OpenSeaTimingEvidence {
-  const elapsed = Number((clock.nowMonotonic() - startedMono) / 1000000n);
-  return { requestStartedAt: new Date(startedWall).toISOString(), responseHeadersAt: new Date(headersWall).toISOString(), responseCompletedAt: new Date(completedWall).toISOString(), elapsedMs: Number.isSafeInteger(elapsed) && elapsed >= 0 ? elapsed : deadline, overallDeadlineMs: deadline, deadlineExceeded: false };
+function timing(startedWall: number, deadline: number, headersWall: number, completedWall: number, elapsedMs: number): OpenSeaTimingEvidence {
+  return { requestStartedAt: new Date(startedWall).toISOString(), responseHeadersAt: new Date(headersWall).toISOString(), responseCompletedAt: new Date(completedWall).toISOString(), elapsedMs, overallDeadlineMs: deadline, deadlineExceeded: false };
 }
 
 /** Execute exactly one fixed-host HTTPS Get Order request and immediately adapt it. */
@@ -47,9 +46,12 @@ function executeCore(input: CoreInput): Promise<OpenSeaExactOrderObservationV1> 
     let request: TransportRequest | null = null;
     let timer: unknown;
     const claim = (): boolean => { if (settled) return false; settled = true; if (timer !== undefined) clock.clearTimeout(timer); return true; };
-    const finish = (raw: OpenSeaExactOrderRawInput, cancel?: () => void): void => { if (!claim()) return; try { cancel?.(); } finally { resolve(adaptOpenSeaExactOrder(raw)); } };
-    const elapsed = () => Number((clock.nowMonotonic() - startedMono) / 1000000n);
-    const timeout = () => finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" }, () => request?.destroy?.());
+    const finish = (raw: OpenSeaExactOrderRawInput, cancel?: () => void, elapsedSample = Number((clock.nowMonotonic() - startedMono) / 1000000n)): void => {
+      if (raw.transportOutcome !== "TIMEOUT" && elapsedSample > input.overallDeadlineMs) { finishTimeout(cancel); return; }
+      if (!claim()) return; try { cancel?.(); } finally { resolve(adaptOpenSeaExactOrder(raw)); }
+    };
+    const finishTimeout = (cancel?: () => void): void => { if (!claim()) return; try { cancel?.(); } finally { resolve(adaptOpenSeaExactOrder({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" })); } };
+    const timeout = () => finishTimeout(() => request?.destroy?.());
     timer = clock.setTimeout(timeout, input.overallDeadlineMs);
     try {
       request = factory(options, (response) => {
@@ -57,9 +59,10 @@ function executeCore(input: CoreInput): Promise<OpenSeaExactOrderObservationV1> 
         const status = typeof response.statusCode === "number" ? response.statusCode : null;
         const headers = rawHeaders(response.rawHeaders);
         const headersWall = clock.nowWall();
-        if (elapsed() > input.overallDeadlineMs) { finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" }, () => { response.destroy?.(); request?.destroy?.(); }); return; }
+        const headerElapsed = Number((clock.nowMonotonic() - startedMono) / 1000000n);
+        if (headerElapsed > input.overallDeadlineMs) { finishTimeout(() => { response.destroy?.(); request?.destroy?.(); }); return; }
         if (status !== 200) {
-          finish({ context: input.context, httpStatus: status, body: null, headers, transportOutcome: "HTTP" }, () => response.destroy?.());
+          finish({ context: input.context, httpStatus: status, body: null, headers, transportOutcome: "HTTP" }, () => response.destroy?.(), headerElapsed);
           return;
         }
         const buffer = new Uint8Array(ONE_MIB + 1);
@@ -71,10 +74,10 @@ function executeCore(input: CoreInput): Promise<OpenSeaExactOrderObservationV1> 
           if (remaining <= 0) return;
           const copyLength = Math.min(remaining, chunk.byteLength);
           buffer.set(chunk.subarray(0, copyLength), size); size += copyLength;
-          if (size >= ONE_MIB + 1) finish({ context: input.context, httpStatus: 200, body: buffer, headers, transportOutcome: "HTTP" }, () => response.destroy?.());
+          if (size >= ONE_MIB + 1) { const dataElapsed = Number((clock.nowMonotonic() - startedMono) / 1000000n); finish({ context: input.context, httpStatus: 200, body: buffer, headers, transportOutcome: "HTTP" }, () => response.destroy?.(), dataElapsed); }
         });
-        response.on("end", () => { if (settled) return; if (elapsed() > input.overallDeadlineMs) { finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "TIMEOUT" }, () => { response.destroy?.(); request?.destroy?.(); }); return; } finish({ context: input.context, httpStatus: 200, body: buffer.slice(0, size), headers, timing: timing(clock, startedWall, startedMono, input.overallDeadlineMs, headersWall, clock.nowWall()), transportOutcome: "HTTP" }); });
-        response.on("error", () => { finish({ context: input.context, httpStatus: 200, body: null, headers, transportOutcome: "CONNECTION_RESET" }); });
+        response.on("end", () => { if (settled) return; const completionElapsed = Number((clock.nowMonotonic() - startedMono) / 1000000n); if (completionElapsed > input.overallDeadlineMs) { finishTimeout(() => { response.destroy?.(); request?.destroy?.(); }); return; } finish({ context: input.context, httpStatus: 200, body: buffer.slice(0, size), headers, timing: timing(startedWall, input.overallDeadlineMs, headersWall, clock.nowWall(), completionElapsed), transportOutcome: "HTTP" }, undefined, completionElapsed); });
+        response.on("error", () => { const errorElapsed = Number((clock.nowMonotonic() - startedMono) / 1000000n); finish({ context: input.context, httpStatus: 200, body: null, headers, transportOutcome: "CONNECTION_RESET" }, undefined, errorElapsed); });
       });
       request.on("error", () => finish({ context: input.context, httpStatus: null, body: null, transportOutcome: "CONNECTION_RESET" }));
       request.end();

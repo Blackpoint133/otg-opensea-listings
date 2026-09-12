@@ -70,24 +70,41 @@ function price(value: LosslessJsonValue): boolean {
     officialJsonInt32Value(current.decimals) !== null && stringField(current, "value");
 }
 
-function parameters(value: LosslessJsonValue): boolean {
+const UINT256_MAX = (1n << 256n) - 1n;
+
+function liveCompatibleCounter(value: LosslessJsonValue): boolean {
+  if (isOfficialJsonInteger(value)) return true;
+  if (typeof value !== "string") return false;
+  if (/^(0|[1-9][0-9]*)$/.test(value)) {
+    if (value.length > 78) return false;
+    try { return BigInt(value) <= UINT256_MAX; } catch { return false; }
+  }
+  if (/^0x[0-9a-fA-F]+$/.test(value)) {
+    const digits = value.slice(2);
+    if (digits.length > 64) return false;
+    try { return BigInt(value) <= UINT256_MAX; } catch { return false; }
+  }
+  return false;
+}
+
+function parameters(value: LosslessJsonValue, liveCompatible = false): boolean {
   if (!isJsonObject(value)) return false;
   const object = value as Record<string, LosslessJsonValue>;
   for (const key of ["offerer", "startTime", "endTime", "zone", "zoneHash", "salt", "conduitKey"])
     if (!stringField(object, key)) return false;
   for (const key of ["orderType", "totalOriginalConsiderationItems"])
     if (!own(object, key) || officialJsonInt32Value(object[key]) === null) return false;
-  if (!own(object, "counter") || !isOfficialJsonInteger(object.counter)) return false;
+  if (!own(object, "counter") || (liveCompatible ? !liveCompatibleCounter(object.counter) : !isOfficialJsonInteger(object.counter))) return false;
   if (!Array.isArray(object.offer) || !Array.isArray(object.consideration)) return false;
   return object.offer.every((entry: LosslessJsonValue) => item(entry, false)) &&
     object.consideration.every((entry: LosslessJsonValue) => item(entry, true));
 }
 
-function protocolData(value: LosslessJsonValue): boolean {
+function protocolData(value: LosslessJsonValue, liveCompatible = false): boolean {
   if (!isJsonObject(value)) return false;
   const object = value as Record<string, LosslessJsonValue>;
-  return own(object, "parameters") && parameters(object.parameters) &&
-    (!own(object, "signature") || stringField(object, "signature"));
+  return own(object, "parameters") && parameters(object.parameters, liveCompatible) &&
+    (!own(object, "signature") || stringField(object, "signature") || (liveCompatible && object.signature === null));
 }
 
 function svmOrder(value: LosslessJsonValue): boolean {
@@ -105,6 +122,10 @@ function asset(value: LosslessJsonValue): boolean {
 
 /** Admission of the exact captured OpenAPI Listing schema consumed by OTG. */
 export function validateOfficialListingRequired(order: Record<string, LosslessJsonValue>): boolean {
+  return validateListing(order, false);
+}
+
+function validateListing(order: Record<string, LosslessJsonValue>, liveCompatible: boolean): boolean {
   for (const key of ["chain", "price", "remaining_quantity", "status", "type"])
     if (!own(order, key)) return false;
   if (!stringField(order, "chain") || !price(order.price) || officialJsonInt64Value(order.remaining_quantity) === null ||
@@ -113,10 +134,19 @@ export function validateOfficialListingRequired(order: Record<string, LosslessJs
 
   if (own(order, "order_hash") && !stringField(order, "order_hash")) return false;
   if (own(order, "protocol_address") && !stringField(order, "protocol_address")) return false;
-  if (own(order, "protocol_data") && !protocolData(order.protocol_data)) return false;
+  if (own(order, "protocol_data") && !protocolData(order.protocol_data, liveCompatible)) return false;
   if (own(order, "asset") && !asset(order.asset)) return false;
   if (own(order, "order_created_at") && officialJsonInt64Value(order.order_created_at) === null) return false;
   if (own(order, "protocol") && !stringField(order, "protocol")) return false;
   if (own(order, "svm_order") && !svmOrder(order.svm_order)) return false;
   return true;
+}
+
+/**
+ * Narrow compatibility admission for the two observed live OpenSea wire drifts.
+ * The immutable Task-32 validator above remains strict and is intentionally not
+ * broadened. All other Listing predicates are shared unchanged.
+ */
+export function validateOpenSeaLiveCompatibleListing(order: Record<string, LosslessJsonValue>): boolean {
+  return validateListing(order, true);
 }

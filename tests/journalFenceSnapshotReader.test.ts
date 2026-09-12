@@ -4,22 +4,23 @@ import { PostgresJournalFenceSnapshotReader, applyProductionJournalFence } from 
 import type { DbPool, QueryResult, TransactionClient } from "../src/db/types.js";
 import { adaptOpenSeaExactOrder } from "../src/reconciliation/verifier/openSeaExactOrderAdapter.js";
 import { interpretOpenSeaExactOrderObservation } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
+import { eventFingerprint } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
 import { encodeCanonicalOrder, makeCanonicalOfficialOrder } from "./helpers/openSeaCanonicalOrder.js";
 import { disposeTrustedContexts, makeTrustedContexts } from "./helpers/trustedVerifierContexts.js";
 
 const ORDER = "0x" + "a".repeat(64), CONTRACT = "0x" + "b".repeat(40), OTHER = "0x" + "c".repeat(64);
 type Row = { event_id: string; event_type: string; event_version: string | null; order_hash: string | null; chain: string | null; contract_address: string | null; token_id: string | null; received_at: string | Date };
 class Sim implements DbPool {
-  rows: Row[] = []; private snap: Row[] | null = null; beforeRelevant?: () => void;
-  async connect(): Promise<TransactionClient> { const self=this; return { release(){}, query: async <T>(sql:string, values?:readonly unknown[]) => self.queryTx<T>(sql, values) }; }
+  rows: Row[] = []; private snap: Row[] | null = null; beforeRelevant?: () => void; failRelevant = false; begins = 0; commits = 0; rollbacks = 0; releases = 0;
+  async connect(): Promise<TransactionClient> { const self=this; return { release(){self.releases++;}, query: async <T>(sql:string, values?:readonly unknown[]) => self.queryTx<T>(sql, values) }; }
   async end() {}
   private async queryTx<T>(sql:string, values?:readonly unknown[]): Promise<QueryResult<T>> {
-    if (/^BEGIN/.test(sql)) { this.snap=this.rows.map(r=>({...r})); return {rows:[],rowCount:0}; }
+    if (/^BEGIN/.test(sql)) { this.begins++; this.snap=this.rows.map(r=>({...r})); return {rows:[],rowCount:0}; }
     if (/SET TRANSACTION/.test(sql)) return {rows:[],rowCount:0};
-    if (/ROLLBACK/.test(sql)) { this.snap=null; return {rows:[],rowCount:0}; }
-    if (/COMMIT/.test(sql)) { this.snap=null; return {rows:[],rowCount:0}; }
+    if (/ROLLBACK/.test(sql)) { this.rollbacks++; this.snap=null; return {rows:[],rowCount:0}; }
+    if (/COMMIT/.test(sql)) { this.commits++; this.snap=null; return {rows:[],rowCount:0}; }
     const data=this.snap ?? this.rows;
-    if (/transaction_timestamp/.test(sql)) return {rows:[{now:"2026-01-01T00:00:00.000Z"} as T],rowCount:1};
+    if (/transaction_timestamp/.test(sql)) return {rows:[{now:new Date("2026-01-01T00:00:00.000Z")} as T],rowCount:1};
     if (/ORDER BY event_id DESC/.test(sql)) { const r=[...data].sort((a,b)=>BigInt(a.event_id)<BigInt(b.event_id)?1:BigInt(a.event_id)>BigInt(b.event_id)?-1:0)[0]; return {rows:r?[{event_id:r.event_id,received_at:r.received_at} as T]:[],rowCount:r?1:0}; }
     if (/SELECT event_id::text AS event_id,event_type/.test(sql)) { this.beforeRelevant?.(); this.beforeRelevant=undefined; const hi=String(values?.[0]); const [,ord,chain,contract,token]=values ?? []; const out=data.filter(r=>BigInt(r.event_id)<=BigInt(hi!) && (r.order_hash===ord || (r.chain===chain&&r.contract_address===contract&&r.token_id===token))).sort((a,b)=>BigInt(a.event_id)<BigInt(b.event_id)?-1:BigInt(a.event_id)>BigInt(b.event_id)?1:0); return {rows:out.map(r=>({...r}) as T),rowCount:out.length}; }
     throw new Error(`UNSUPPORTED_SIM_SQL:${sql}`);
@@ -35,5 +36,6 @@ test("direct order and same-NFT events are relevant while unrelated rows are exc
 test("empty journal returns deterministic valid snapshot", async()=>{const s=await new PostgresJournalFenceSnapshotReader(new Sim()).readSnapshot(id);assert.equal(s.watermark.eventId,"0");assert.equal(s.relevantOrderFingerprint.eventIds.length,0);assert.equal(s.relevantOrderFingerprint.orderingAmbiguous,false);});
 test("malformed relevant row fails closed", async()=>{const db=new Sim();db.insert(row("1","unknown"));await assert.rejects(()=>new PostgresJournalFenceSnapshotReader(db).readSnapshot(id),/MALFORMED_JOURNAL_EVENT/);});
 test("malformed identities fail before SQL", async()=>{const reader=new PostgresJournalFenceSnapshotReader(new Sim());for(const bad of [{...id,orderHash:"bad"},{...id,contractAddress:"bad"},{...id,tokenId:"-1"},{...id,chain:"ethereum"}])await assert.rejects(()=>reader.readSnapshot(bad),/INVALID_JOURNAL_SNAPSHOT_IDENTITY/);});
+test("reader rolls back and releases on bounded query failure", async()=>{const db=new Sim();db.insert(row("1","item_listed"));db.beforeRelevant=()=>{throw new Error("INJECTED_RELEVANT_FAILURE")};await assert.rejects(()=>new PostgresJournalFenceSnapshotReader(db).readSnapshot(id),/INJECTED_RELEVANT_FAILURE/);assert.equal(db.rollbacks,1);assert.equal(db.releases,1);assert.equal(db.commits,0);});
 
 test("production fence bridge executes accepted fence algorithm", async()=>{const graph=await makeTrustedContexts();try{const context=graph.contexts[0];const body=encodeCanonicalOrder(makeCanonicalOfficialOrder(context));const observation=adaptOpenSeaExactOrder({context,httpStatus:200,body,headers:[{name:"Date",value:"Tue, 01 Jan 2030 00:00:00 GMT"},{name:"Content-Type",value:"application/json"},{name:"Content-Encoding",value:"identity"}],timing:{requestStartedAt:"2030-01-01T00:00:00.000Z",responseHeadersAt:"2030-01-01T00:00:00.100Z",responseCompletedAt:"2030-01-01T00:00:00.200Z",elapsedMs:10,overallDeadlineMs:1000,deadlineExceeded:false}});const provider=interpretOpenSeaExactOrderObservation({context,observation});const db=new Sim();const bridge=await applyProductionJournalFence({providerResult:provider,context,snapshotReader:new PostgresJournalFenceSnapshotReader(db)});assert.equal(bridge.authorityGranted,false);assert.equal(bridge.deactivationAuthorityGranted,false);}finally{await disposeTrustedContexts(graph.root);}});

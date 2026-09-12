@@ -29,7 +29,7 @@ export class PostgresJournalFenceSnapshotReader implements JournalFenceSnapshotR
       await client.query("BEGIN");
       await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
       const high = await client.query<WatermarkRow>("SELECT event_id::text AS event_id, received_at FROM public.opensea_listings_events_v2 ORDER BY event_id DESC LIMIT 1");
-      const watermark: JournalFenceSnapshot["watermark"] = high.rows[0] ? { eventId: high.rows[0].event_id, receivedAt: iso(high.rows[0].received_at) } : { eventId: "0", receivedAt: iso((await client.query<{ now: string }>("SELECT transaction_timestamp()::timestamptz::text AS now")).rows[0]?.now) };
+      const watermark: JournalFenceSnapshot["watermark"] = high.rows[0] ? { eventId: high.rows[0].event_id, receivedAt: iso(high.rows[0].received_at) } : { eventId: "0", receivedAt: iso((await client.query<{ now: Date | string }>("SELECT transaction_timestamp() AS now")).rows[0]?.now) };
       if (!isDecimal(watermark.eventId)) throw new Error("INVALID_JOURNAL_WATERMARK");
       const rows = await client.query<EventRow>("SELECT event_id::text AS event_id,event_type,event_version::text AS event_version,order_hash,chain,contract_address,token_id FROM public.opensea_listings_events_v2 WHERE event_id <= $1::bigint AND (order_hash = $2 OR (chain = $3 AND contract_address = $4 AND token_id = $5)) ORDER BY event_id ASC", [watermark.eventId, identity.orderHash, identity.chain, identity.contractAddress, identity.tokenId]);
       const events = rows.rows.map((row) => project(row, identity.orderHash));

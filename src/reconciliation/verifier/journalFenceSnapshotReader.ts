@@ -8,13 +8,13 @@ const SUPPORTED_CHAIN = "gunzilla";
 
 export interface JournalFenceSnapshotIdentity { readonly orderHash: string; readonly chain: string; readonly contractAddress: string; readonly tokenId: string; }
 export interface JournalFenceSnapshotReader { readSnapshot(identity: Readonly<JournalFenceSnapshotIdentity>): Promise<JournalFenceSnapshot>; }
-interface WatermarkRow { event_id: string; received_at: string; }
+interface WatermarkRow { event_id: string; received_at: string | Date; }
 interface EventRow { event_id: string; event_type: string; event_version: string | null; order_hash: string | null; chain: string | null; contract_address: string | null; token_id: string | null; }
 
 function validateIdentity(identity: JournalFenceSnapshotIdentity): void {
   if (!isCanonicalOrderHash(identity.orderHash) || identity.chain !== SUPPORTED_CHAIN || !isCanonicalAddress(identity.contractAddress) || !isDecimal(identity.tokenId)) throw new Error("INVALID_JOURNAL_SNAPSHOT_IDENTITY");
 }
-function iso(value: unknown): string { if (typeof value !== "string" || !isIso(value)) throw new Error("INVALID_JOURNAL_TIMESTAMP"); return value; }
+function iso(value: unknown): string { const text = value instanceof Date ? value.toISOString() : value; if (typeof text !== "string" || !isIso(text)) throw new Error("INVALID_JOURNAL_TIMESTAMP"); return text; }
 function project(row: EventRow, target: string): RelevantOrderEvent {
   if (!isDecimal(row.event_id) || !EVENT_TYPES.has(row.event_type as RelevantEventType) || (row.event_version !== null && !isDecimal(row.event_version))) throw new Error("MALFORMED_JOURNAL_EVENT");
   return { eventId: row.event_id, eventType: row.event_type as RelevantEventType, orderHash: target, eventVersion: row.event_version };

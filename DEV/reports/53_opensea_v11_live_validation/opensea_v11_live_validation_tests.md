@@ -27,4 +27,3 @@ The returned trusted observation was passed through `interpretOpenSeaExactOrderO
 - `SECRET_LEAK_CHECK`: PASS
 
 The temporary runner was deleted before commit. Raw response body and request headers were not persisted. The live phase had one production invocation and one OpenSea application request, with no retry or fallback.
-

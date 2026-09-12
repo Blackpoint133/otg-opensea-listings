@@ -25,6 +25,7 @@ probe_result.json
 *.sqlite
 *.sqlite3
 *.sql
+!/sql/006_add_targeted_verifier_throttle_state.sql
 # Audited schema migrations are source, not database dumps.
 !/sql/001_create_v2_schema.sql
 !/sql/002_add_journal_processing_lifecycle.sql

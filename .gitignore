@@ -29,6 +29,7 @@ probe_result.json
 !/sql/001_create_v2_schema.sql
 !/sql/002_add_journal_processing_lifecycle.sql
 !/sql/003_add_inbox_attempt_ledger.sql
+!/sql/004_create_targeted_verifier_attempts.sql
 *.dump
 *.csv
 /exports/

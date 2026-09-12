@@ -1,258 +1,57 @@
 import { randomUUID } from "node:crypto";
 import type { DbPool } from "../../db/types.js";
 import { canonicalEvidence, deepFreeze, sha256Canonical } from "../evidence/canonicalEvidence.js";
-import type { OpenSeaExactOrderObservationV1 } from "./openSeaExactOrderAdapter.js";
 import { interpretOpenSeaExactOrderObservation } from "./targetedVerifierNormalizer.js";
-import {
-  attemptIdentity, canonicalRequestIdentity, semanticEvidenceMaterial, validateTargetedVerifierEligibility,
-} from "./targetedVerifierPolicy.js";
-import {
-  OPENSEA_ORDER_CONTRACT_VERSION, TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION,
-  TARGETED_VERIFIER_GENERATION_MODEL_VERSION, TARGETED_VERIFIER_NORMALIZER_VERSION,
-  TARGETED_VERIFIER_POLICY_VERSION, TARGETED_VERIFIER_SCHEMA_VERSION,
-  type ProviderResult, type TargetedVerifierContext, type VerifierLifecycle, type JournalFenceSnapshot, type RelevantOrderFingerprint
-} from "./targetedVerifierTypes.js";
+import type { OpenSeaExactOrderObservationV1 } from "./openSeaExactOrderAdapter.js";
+import { attemptIdentity, canonicalRequestIdentity, semanticEvidenceMaterial, validateTargetedVerifierEligibility } from "./targetedVerifierPolicy.js";
+import { OPENSEA_ORDER_CONTRACT_VERSION, TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION, TARGETED_VERIFIER_GENERATION_MODEL_VERSION, TARGETED_VERIFIER_NORMALIZER_VERSION, TARGETED_VERIFIER_POLICY_VERSION, TARGETED_VERIFIER_SCHEMA_VERSION, type JournalFenceSnapshot, type ProviderResult, type RelevantOrderFingerprint, type TargetedVerifierContext, type VerifierLifecycle } from "./targetedVerifierTypes.js";
 
-export interface TargetedVerifierOperationalPolicy {
-  readonly minimumSpacingMs: number;
-  readonly maxConcurrent: number;
-  readonly rateLimitedDelayMs: number;
-  readonly transientTransportDelayMs: number;
-  readonly maxAttempts: number;
-  readonly leaseMs: number;
-}
-
-export const DEFAULT_TARGETED_VERIFIER_OPERATIONAL_POLICY: TargetedVerifierOperationalPolicy = Object.freeze({
-  minimumSpacingMs: 1_000,
-  maxConcurrent: 2,
-  rateLimitedDelayMs: 60_000,
-  transientTransportDelayMs: 5_000,
-  maxAttempts: 3,
-  leaseMs: 120_000,
-});
-
-export interface OperationalAttemptRecord {
-  readonly attemptId: string;
-  readonly attemptNumber: number;
-  readonly idempotencyKey: string;
-  readonly sweepId: string;
-  readonly orderHash: string;
-  readonly candidateArtifactHash: string;
-  readonly barrierArtifactHash: string;
-  readonly generationRootHash: string;
-  readonly candidateModelVersion: string;
-  readonly generationModelVersion: string;
-  readonly verifierSchemaVersion: string;
-  readonly verifierPolicyVersion: string;
-  readonly providerContractVersion: string;
-  readonly normalizerVersion: string;
-  readonly expectedIdentity: TargetedVerifierContext["expectedIdentity"];
-  readonly requestIdentity: ReturnType<typeof canonicalRequestIdentity>;
-  readonly lifecycle: VerifierLifecycle;
-  readonly leaseToken: string | null;
-  readonly createdAt: string;
-  readonly claimedAt: string | null;
-  readonly leaseExpiresAt: string | null;
-  readonly verificationStartedAt: string | null;
-  readonly verificationCompletedAt: string | null;
-  readonly providerObservedAt: string | null;
-  readonly httpStatus: number | null;
-  readonly transportOutcome: "HTTP" | "TIMEOUT" | "CONNECTION_RESET" | null;
-  readonly responseBodySha256: string | null;
-  readonly rawResponseArtifactHash: string | null;
-  readonly normalizedProviderStatus: ProviderResult["providerStatus"];
-  readonly providerResultStatus: ProviderResult["status"] | null;
-  readonly providerReasonCodes: readonly string[];
-  readonly normalizedOrder: ProviderResult["normalizedOrder"];
-  readonly providerResultReasonCodes: readonly string[];
-  readonly reasonCodes: readonly string[];
-  readonly preVerificationWatermark: JournalFenceSnapshot["watermark"];
-  readonly postVerificationWatermark: JournalFenceSnapshot["watermark"] | null;
-  readonly preRelevantFingerprint: RelevantOrderFingerprint;
-  readonly postRelevantFingerprint: RelevantOrderFingerprint | null;
-  readonly semanticEvidenceHash: string | null;
-  readonly authorityGranted: false;
-  readonly deactivationAuthorityGranted: false;
-  readonly failureClassification: string | null;
-  readonly nextAttemptAt: string | null;
-}
-
-export interface AttemptCreateInput {
-  readonly context: TargetedVerifierContext;
-  readonly preVerification: JournalFenceSnapshot;
-  readonly createdAt: string;
-  readonly attemptNumber?: number;
-}
-
-export interface ClaimedAttempt {
-  readonly record: OperationalAttemptRecord;
-  readonly leaseToken: string;
-}
-
-export interface PostVerificationFenceResult {
-  readonly valid: boolean;
-  readonly status: "STABLE" | "STALE" | "RECONCILIATION_REQUIRED";
-  readonly postVerification: JournalFenceSnapshot;
-  readonly reasonCodes: readonly string[];
-}
-
-export interface TargetedVerifierAttemptStore {
-  createOrGet(input: OperationalAttemptRecord): Promise<OperationalAttemptRecord>;
-  get(attemptId: string): Promise<OperationalAttemptRecord | null>;
-  listDue(now: string, limit: number): Promise<readonly OperationalAttemptRecord[]>;
-  claim(attemptId: string, workerId: string, now: string, leaseMs: number): Promise<ClaimedAttempt | null>;
-  saveResponse(attemptId: string, leaseToken: string, record: OperationalAttemptRecord): Promise<boolean>;
-  complete(attemptId: string, leaseToken: string, record: OperationalAttemptRecord): Promise<boolean>;
-  fail(attemptId: string, leaseToken: string, record: OperationalAttemptRecord): Promise<boolean>;
-  scheduleRetry(attemptId: string, leaseToken: string, record: OperationalAttemptRecord): Promise<boolean>;
-  reclaimExpired(now: string): Promise<number>;
-}
-
+export interface TargetedVerifierOperationalPolicy { readonly minimumSpacingMs: number; readonly maxConcurrent: number; readonly rateLimitedDelayMs: number; readonly transientTransportDelayMs: number; readonly maxAttempts: number; readonly leaseMs: number; }
+export const DEFAULT_TARGETED_VERIFIER_OPERATIONAL_POLICY: TargetedVerifierOperationalPolicy = Object.freeze({ minimumSpacingMs: 1000, maxConcurrent: 2, rateLimitedDelayMs: 60000, transientTransportDelayMs: 5000, maxAttempts: 3, leaseMs: 120000 });
+export interface OperationalAttemptRecord { readonly attemptId: string; readonly attemptNumber: number; readonly idempotencyKey: string; readonly sweepId: string; readonly orderHash: string; readonly candidateArtifactHash: string; readonly barrierArtifactHash: string; readonly generationRootHash: string; readonly candidateModelVersion: string; readonly generationModelVersion: string; readonly verifierSchemaVersion: string; readonly verifierPolicyVersion: string; readonly providerContractVersion: string; readonly normalizerVersion: string; readonly expectedIdentity: TargetedVerifierContext["expectedIdentity"]; readonly requestIdentity: ReturnType<typeof canonicalRequestIdentity>; readonly lifecycle: VerifierLifecycle; readonly leaseToken: string | null; readonly createdAt: string; readonly claimedAt: string | null; readonly leaseExpiresAt: string | null; readonly verificationStartedAt: string | null; readonly verificationCompletedAt: string | null; readonly providerObservedAt: string | null; readonly httpStatus: number | null; readonly transportOutcome: "HTTP" | "TIMEOUT" | "CONNECTION_RESET" | null; readonly responseBodySha256: string | null; readonly rawResponseArtifactHash: string | null; readonly normalizedProviderStatus: ProviderResult["providerStatus"]; readonly providerResultStatus: ProviderResult["status"] | null; readonly providerReasonCodes: readonly string[]; readonly normalizedOrder: ProviderResult["normalizedOrder"]; readonly providerResultReasonCodes: readonly string[]; readonly reasonCodes: readonly string[]; readonly preVerificationWatermark: JournalFenceSnapshot["watermark"]; readonly postVerificationWatermark: JournalFenceSnapshot["watermark"] | null; readonly preRelevantFingerprint: RelevantOrderFingerprint; readonly postRelevantFingerprint: RelevantOrderFingerprint | null; readonly semanticEvidenceHash: string | null; readonly authorityGranted: false; readonly deactivationAuthorityGranted: false; readonly failureClassification: string | null; readonly nextAttemptAt: string | null; }
+export interface AttemptCreateInput { readonly context: TargetedVerifierContext; readonly preVerification: JournalFenceSnapshot; readonly createdAt: string; readonly attemptNumber?: number; }
+export interface ClaimedAttempt { readonly record: OperationalAttemptRecord; readonly leaseToken: string; }
+export interface PostVerificationFenceResult { readonly valid: boolean; readonly status: "STABLE" | "STALE" | "RECONCILIATION_REQUIRED"; readonly postVerification: JournalFenceSnapshot; readonly reasonCodes: readonly string[]; }
+export interface TargetedVerifierAttemptStore { createOrGet(input: OperationalAttemptRecord): Promise<OperationalAttemptRecord>; get(attemptId: string): Promise<OperationalAttemptRecord | null>; listDue(now: string, limit: number): Promise<readonly OperationalAttemptRecord[]>; claim(attemptId: string, workerId: string, now: string, leaseMs: number): Promise<ClaimedAttempt | null>; saveResponse(attemptId: string, leaseToken: string, record: OperationalAttemptRecord, operationAt?: string): Promise<boolean>; complete(attemptId: string, leaseToken: string, record: OperationalAttemptRecord, operationAt?: string): Promise<boolean>; fail(attemptId: string, leaseToken: string, record: OperationalAttemptRecord, operationAt?: string): Promise<boolean>; scheduleRetry(attemptId: string, leaseToken: string, record: OperationalAttemptRecord, operationAt?: string): Promise<boolean>; reclaimExpired(now: string): Promise<number>; acquirePermit(workerId: string, nowMs: number, maxConcurrent: number, minimumSpacingMs: number, leaseMs: number): Promise<{ readonly permitId: string; readonly leaseExpiresAtMs: number } | null>; releasePermit(permitId: string): Promise<void>; }
 export interface InMemoryTargetedVerifierAttemptStoreOptions { readonly records?: readonly OperationalAttemptRecord[]; }
-
-function clone<T>(value: T): T { return structuredClone(value); }
-function frozen<T>(value: T): T { return deepFreeze(value); }
-function validIso(value: string): boolean { return Number.isFinite(Date.parse(value)); }
-function requireIso(value: string): void { if (!validIso(value)) throw new Error("INVALID_OPERATIONAL_TIMESTAMP"); }
-function leaseUntil(now: string, leaseMs: number): string { const value = Date.parse(now) + leaseMs; if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0 || !Number.isFinite(value)) throw new Error("INVALID_LEASE"); return new Date(value).toISOString(); }
-function sameLease(record: OperationalAttemptRecord, token: string): boolean { return (record.lifecycle === "REQUEST_PENDING" || record.lifecycle === "RESPONSE_OBSERVED" || record.lifecycle === "PENDING_FENCE") && record.leaseToken === token && record.leaseExpiresAt !== null && token.length > 0; }
-function due(record: OperationalAttemptRecord, now: string): boolean { return record.lifecycle === "NOT_STARTED" && (record.nextAttemptAt === null || record.nextAttemptAt <= now); }
+const clone = <T>(v: T): T => structuredClone(v); const frozen = <T>(v: T): T => deepFreeze(v); const validIso = (v: string): boolean => Number.isFinite(Date.parse(v));
+const leaseUntil = (now: string, ms: number): string => { const t = Date.parse(now) + ms; if (!Number.isSafeInteger(ms) || ms <= 0 || !Number.isFinite(t)) throw new Error("INVALID_LEASE"); return new Date(t).toISOString(); };
+const sameLease = (r: OperationalAttemptRecord, token: string, at: string): boolean => (r.lifecycle === "REQUEST_PENDING" || r.lifecycle === "RESPONSE_OBSERVED" || r.lifecycle === "PENDING_FENCE") && r.leaseToken === token && r.leaseExpiresAt !== null && Date.parse(r.leaseExpiresAt) > Date.parse(at) && token.length > 0;
+const due = (r: OperationalAttemptRecord, now: string): boolean => (r.lifecycle === "NOT_STARTED" && (r.nextAttemptAt === null || r.nextAttemptAt <= now)) || ((r.lifecycle === "RESPONSE_OBSERVED" || r.lifecycle === "PENDING_FENCE") && r.leaseToken === null);
 
 export class InMemoryTargetedVerifierAttemptStore implements TargetedVerifierAttemptStore {
-  private readonly rows = new Map<string, OperationalAttemptRecord>();
-  constructor(options: InMemoryTargetedVerifierAttemptStoreOptions = {}) { for (const row of options.records ?? []) this.rows.set(row.attemptId, frozen(clone(row))); }
-  async createOrGet(input: OperationalAttemptRecord): Promise<OperationalAttemptRecord> {
-    const existing = [...this.rows.values()].find((row) => row.idempotencyKey === input.idempotencyKey);
-    if (existing) return clone(existing);
-    this.rows.set(input.attemptId, frozen(clone(input))); return clone(input);
-  }
-  async get(attemptId: string): Promise<OperationalAttemptRecord | null> { const row = this.rows.get(attemptId); return row ? clone(row) : null; }
-  async listDue(now: string, limit: number): Promise<readonly OperationalAttemptRecord[]> { return [...this.rows.values()].filter((row) => due(row, now)).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, limit).map(clone); }
-  async claim(attemptId: string, workerId: string, now: string, leaseMs: number): Promise<ClaimedAttempt | null> {
-    const row = this.rows.get(attemptId); if (!row || !due(row, now) || workerId.length === 0) return null;
-    const token = `${workerId}:${randomUUID()}`;
-    const claimed = frozen({ ...row, lifecycle: "REQUEST_PENDING" as const, leaseToken: token, claimedAt: now, leaseExpiresAt: leaseUntil(now, leaseMs), verificationStartedAt: now });
-    this.rows.set(attemptId, claimed); return { record: clone(claimed), leaseToken: token };
-  }
-  private cas(attemptId: string, leaseToken: string, record: OperationalAttemptRecord): boolean {
-    const current = this.rows.get(attemptId); if (!current || !sameLease(current, leaseToken)) return false;
-    this.rows.set(attemptId, frozen(clone(record))); return true;
-  }
-  async saveResponse(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record); }
-  async complete(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record); }
-  async fail(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record); }
-  async scheduleRetry(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record); }
-  async reclaimExpired(now: string): Promise<number> {
-    let count = 0;
-    for (const [id, row] of this.rows) if (row.lifecycle === "REQUEST_PENDING" && row.leaseExpiresAt !== null && row.leaseExpiresAt <= now) {
-      this.rows.set(id, frozen({ ...row, lifecycle: "FAILED" as const, leaseToken: null, leaseExpiresAt: null, failureClassification: "REQUEST_OUTCOME_UNCERTAIN" })); count++;
-    }
-    return count;
-  }
+  private readonly rows = new Map<string, OperationalAttemptRecord>(); private readonly permits = new Map<string, number>(); private lastPermitStartMs: number | null = null;
+  constructor(options: InMemoryTargetedVerifierAttemptStoreOptions = {}) { for (const r of options.records ?? []) this.rows.set(r.attemptId, frozen(clone(r))); }
+  async createOrGet(input: OperationalAttemptRecord): Promise<OperationalAttemptRecord> { const old = [...this.rows.values()].find((r) => r.idempotencyKey === input.idempotencyKey); if (old) return clone(old); this.rows.set(input.attemptId, frozen(clone(input))); return clone(input); }
+  async get(id: string): Promise<OperationalAttemptRecord | null> { const r = this.rows.get(id); return r ? clone(r) : null; }
+  async listDue(now: string, limit: number): Promise<readonly OperationalAttemptRecord[]> { return [...this.rows.values()].filter((r) => due(r, now)).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, limit).map(clone); }
+  async claim(id: string, workerId: string, now: string, leaseMs: number): Promise<ClaimedAttempt | null> { const r = this.rows.get(id); if (!r || !due(r, now) || !workerId) return null; const token = `${workerId}:${randomUUID()}`; const lifecycle = r.lifecycle === "NOT_STARTED" ? "REQUEST_PENDING" as const : r.lifecycle; const c = frozen({ ...r, lifecycle, leaseToken: token, claimedAt: now, leaseExpiresAt: leaseUntil(now, leaseMs), verificationStartedAt: r.verificationStartedAt ?? now }); this.rows.set(id, c); return { record: clone(c), leaseToken: token }; }
+  private cas(id: string, token: string, record: OperationalAttemptRecord, at = new Date().toISOString()): boolean { const r = this.rows.get(id); if (!r || !sameLease(r, token, at)) return false; this.rows.set(id, frozen(clone(record))); return true; }
+  saveResponse(id: string,t: string,r: OperationalAttemptRecord,at?: string): Promise<boolean> { return Promise.resolve(this.cas(id,t,r,at)); } complete(id: string,t: string,r: OperationalAttemptRecord,at?: string): Promise<boolean> { return Promise.resolve(this.cas(id,t,r,at)); } fail(id: string,t: string,r: OperationalAttemptRecord,at?: string): Promise<boolean> { return Promise.resolve(this.cas(id,t,r,at)); } scheduleRetry(id: string,t: string,r: OperationalAttemptRecord,at?: string): Promise<boolean> { return Promise.resolve(this.cas(id,t,r,at)); }
+  async reclaimExpired(now: string): Promise<number> { let n = 0; for (const [id, r] of this.rows) { if (r.leaseExpiresAt === null || r.leaseExpiresAt > now) continue; if (r.lifecycle === "REQUEST_PENDING") { this.rows.set(id, frozen({ ...r, lifecycle: "FAILED" as const, leaseToken: null, leaseExpiresAt: null, failureClassification: "REQUEST_OUTCOME_UNCERTAIN" })); n++; } else if (r.lifecycle === "RESPONSE_OBSERVED" || r.lifecycle === "PENDING_FENCE") { this.rows.set(id, frozen({ ...r, leaseToken: null, leaseExpiresAt: null })); n++; } } return n; }
+  async acquirePermit(workerId: string, nowMs: number, max: number, spacing: number, leaseMs: number): Promise<{ readonly permitId: string; readonly leaseExpiresAtMs: number } | null> { for (const [id, expiry] of this.permits) if (expiry <= nowMs) this.permits.delete(id); if (this.permits.size >= max || (this.lastPermitStartMs !== null && nowMs - this.lastPermitStartMs < spacing)) return null; const id = `${workerId}:${randomUUID()}`; this.permits.set(id, nowMs + leaseMs); this.lastPermitStartMs = nowMs; return { permitId: id, leaseExpiresAtMs: nowMs + leaseMs }; }
+  async releasePermit(id: string): Promise<void> { this.permits.delete(id); }
 }
 
-function rowForContext(input: AttemptCreateInput): OperationalAttemptRecord {
-  const eligibility = validateTargetedVerifierEligibility(input.context);
-  if (!eligibility.valid) throw new Error(`VERIFIER_NOT_ELIGIBLE:${eligibility.reasons.join(",")}`);
-  requireIso(input.createdAt);
-  if (!Number.isSafeInteger(input.attemptNumber ?? 0) || (input.attemptNumber ?? 0) < 0) throw new Error("INVALID_ATTEMPT_NUMBER");
-  const attemptNumber = input.attemptNumber ?? 0;
-  const requestIdentity = canonicalRequestIdentity(input.context);
-  const attemptId = attemptIdentity(input.context, attemptNumber);
-  const idempotencyKey = sha256Canonical({ sweepId: input.context.sweepId, orderHash: input.context.orderHash, candidateArtifactHash: input.context.candidateArtifactHash, barrierArtifactHash: input.context.barrierArtifactHash, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, attemptNumber });
-  return frozen({ attemptId, attemptNumber, idempotencyKey, sweepId: input.context.sweepId, orderHash: input.context.orderHash, candidateArtifactHash: input.context.candidateArtifactHash, barrierArtifactHash: input.context.barrierArtifactHash, generationRootHash: input.context.generationRootHash, candidateModelVersion: TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION, generationModelVersion: TARGETED_VERIFIER_GENERATION_MODEL_VERSION, verifierSchemaVersion: TARGETED_VERIFIER_SCHEMA_VERSION, verifierPolicyVersion: TARGETED_VERIFIER_POLICY_VERSION, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, normalizerVersion: TARGETED_VERIFIER_NORMALIZER_VERSION, expectedIdentity: clone(input.context.expectedIdentity), requestIdentity, lifecycle: "NOT_STARTED" as const, leaseToken: null, createdAt: input.createdAt, claimedAt: null, leaseExpiresAt: null, verificationStartedAt: null, verificationCompletedAt: null, providerObservedAt: null, httpStatus: null, transportOutcome: null, responseBodySha256: null, rawResponseArtifactHash: null, normalizedProviderStatus: null, providerResultStatus: null, providerReasonCodes: [], normalizedOrder: null, providerResultReasonCodes: [], reasonCodes: [], preVerificationWatermark: clone(input.preVerification.watermark), postVerificationWatermark: null, preRelevantFingerprint: clone(input.preVerification.relevantOrderFingerprint), postRelevantFingerprint: null, semanticEvidenceHash: null, authorityGranted: false as const, deactivationAuthorityGranted: false as const, failureClassification: null, nextAttemptAt: null });
-}
+function rowForContext(input: AttemptCreateInput): OperationalAttemptRecord { const e = validateTargetedVerifierEligibility(input.context); if (!e.valid) throw new Error(`VERIFIER_NOT_ELIGIBLE:${e.reasons.join(",")}`); if (!validIso(input.createdAt)) throw new Error("INVALID_OPERATIONAL_TIMESTAMP"); const n = input.attemptNumber ?? 0; if (!Number.isSafeInteger(n) || n < 0) throw new Error("INVALID_ATTEMPT_NUMBER"); const requestIdentity = canonicalRequestIdentity(input.context); const attemptId = attemptIdentity(input.context, n); const idempotencyKey = operationalIdempotencyKey(input.context, n); return frozen({ attemptId, attemptNumber:n, idempotencyKey, sweepId:input.context.sweepId, orderHash:input.context.orderHash, candidateArtifactHash:input.context.candidateArtifactHash, barrierArtifactHash:input.context.barrierArtifactHash, generationRootHash:input.context.generationRootHash, candidateModelVersion:TARGETED_VERIFIER_CANDIDATE_MODEL_VERSION, generationModelVersion:TARGETED_VERIFIER_GENERATION_MODEL_VERSION, verifierSchemaVersion:TARGETED_VERIFIER_SCHEMA_VERSION, verifierPolicyVersion:TARGETED_VERIFIER_POLICY_VERSION, providerContractVersion:OPENSEA_ORDER_CONTRACT_VERSION, normalizerVersion:TARGETED_VERIFIER_NORMALIZER_VERSION, expectedIdentity:clone(input.context.expectedIdentity), requestIdentity, lifecycle:"NOT_STARTED" as const, leaseToken:null, createdAt:input.createdAt, claimedAt:null, leaseExpiresAt:null, verificationStartedAt:null, verificationCompletedAt:null, providerObservedAt:null, httpStatus:null, transportOutcome:null, responseBodySha256:null, rawResponseArtifactHash:null, normalizedProviderStatus:null, providerResultStatus:null, providerReasonCodes:[], normalizedOrder:null, providerResultReasonCodes:[], reasonCodes:[], preVerificationWatermark:clone(input.preVerification.watermark), postVerificationWatermark:null, preRelevantFingerprint:clone(input.preVerification.relevantOrderFingerprint), postRelevantFingerprint:null, semanticEvidenceHash:null, authorityGranted:false as const, deactivationAuthorityGranted:false as const, failureClassification:null, nextAttemptAt:null }); }
 
-export interface TargetedVerifierExecution { readonly observation: OpenSeaExactOrderObservationV1; readonly providerResult: ProviderResult; }
-export interface TargetedVerifierOperationalWorkerOptions {
-  readonly store: TargetedVerifierAttemptStore;
-  readonly execute: (input: { readonly context: TargetedVerifierContext; readonly apiKey: string }) => Promise<TargetedVerifierExecution>;
-  readonly credentialProvider: () => Promise<string>;
-  readonly postFence: (input: { readonly context: TargetedVerifierContext; readonly providerResult: ProviderResult }) => Promise<PostVerificationFenceResult>;
-  readonly contextResolver?: (record: OperationalAttemptRecord) => Promise<TargetedVerifierContext>;
-  readonly now?: () => string;
-  readonly nowMs?: () => number;
-  readonly workerId?: string;
-  readonly policy?: Partial<TargetedVerifierOperationalPolicy>;
-}
-
-export type OperationalRunOutcome = "IDLE" | "CADENCE_BLOCKED" | "CLAIMED" | "STALE_LEASE" | "COMPLETE" | "FAILED" | "RETRY_SCHEDULED";
-export interface OperationalRunResult { readonly outcome: OperationalRunOutcome; readonly attemptId: string | null; readonly record: OperationalAttemptRecord | null; }
+export interface TargetedVerifierOperationalWorkerOptions { readonly store: TargetedVerifierAttemptStore; readonly execute: (input: { readonly context: TargetedVerifierContext; readonly apiKey: string }) => Promise<OpenSeaExactOrderObservationV1>; readonly credentialProvider: () => Promise<string>; readonly postFence: (input: { readonly context: TargetedVerifierContext; readonly providerResult: ProviderResult }) => Promise<PostVerificationFenceResult>; readonly contextResolver?: (record: OperationalAttemptRecord) => Promise<TargetedVerifierContext>; readonly now?: () => string; readonly nowMs?: () => number; readonly workerId?: string; readonly policy?: Partial<TargetedVerifierOperationalPolicy>; }
+export type OperationalRunOutcome = "IDLE" | "CADENCE_BLOCKED" | "CLAIMED" | "STALE_LEASE" | "COMPLETE" | "FAILED" | "RETRY_SCHEDULED"; export interface OperationalRunResult { readonly outcome: OperationalRunOutcome; readonly attemptId: string | null; readonly record: OperationalAttemptRecord | null; }
 
 export class TargetedVerifierOperationalWorker {
-  private readonly policy: TargetedVerifierOperationalPolicy;
-  private readonly now: () => string;
-  private readonly nowMs: () => number;
-  private readonly workerId: string;
-  private active = 0;
-  private lastRequestMs: number | null = null;
-  private readonly contexts = new Map<string, TargetedVerifierContext>();
-  constructor(private readonly options: TargetedVerifierOperationalWorkerOptions) {
-    this.policy = { ...DEFAULT_TARGETED_VERIFIER_OPERATIONAL_POLICY, ...(options.policy ?? {}) };
-    if (!Number.isSafeInteger(this.policy.minimumSpacingMs) || this.policy.minimumSpacingMs < 1 || !Number.isSafeInteger(this.policy.maxConcurrent) || this.policy.maxConcurrent < 1 || !Number.isSafeInteger(this.policy.maxAttempts) || this.policy.maxAttempts < 1) throw new Error("INVALID_OPERATIONAL_POLICY");
-    this.now = options.now ?? (() => new Date().toISOString()); this.nowMs = options.nowMs ?? (() => Date.now()); this.workerId = options.workerId ?? randomUUID();
+  private readonly policy: TargetedVerifierOperationalPolicy; private readonly now: () => string; private readonly nowMs: () => number; private readonly workerId: string; private readonly contexts = new Map<string, TargetedVerifierContext>(); private active = 0; private lastRequestMs: number | null = null;
+  constructor(private readonly options: TargetedVerifierOperationalWorkerOptions) { this.policy = { ...DEFAULT_TARGETED_VERIFIER_OPERATIONAL_POLICY, ...(options.policy ?? {}) }; if (!Number.isSafeInteger(this.policy.minimumSpacingMs) || this.policy.minimumSpacingMs < 1 || !Number.isSafeInteger(this.policy.maxConcurrent) || this.policy.maxConcurrent < 1 || !Number.isSafeInteger(this.policy.maxAttempts) || this.policy.maxAttempts < 1) throw new Error("INVALID_OPERATIONAL_POLICY"); this.now = options.now ?? (() => new Date().toISOString()); this.nowMs = options.nowMs ?? (() => Date.now()); this.workerId = options.workerId ?? randomUUID(); }
+  async createAttempt(input: AttemptCreateInput): Promise<OperationalAttemptRecord> { if ((input.attemptNumber ?? 0) >= this.policy.maxAttempts) throw new Error("MAX_ATTEMPTS_EXCEEDED"); const row = await this.options.store.createOrGet(rowForContext(input)); this.contexts.set(row.attemptId,input.context); return row; }
+  private async stale(id: string): Promise<OperationalRunResult> { return { outcome:"STALE_LEASE", attemptId:id, record:await this.options.store.get(id) }; }
+  async runOnce(id: string): Promise<OperationalRunResult> { const before = await this.options.store.get(id); if (!before) return { outcome:"IDLE",attemptId:id,record:null }; const ms=this.nowMs(); if (this.lastRequestMs!==null&&ms-this.lastRequestMs<this.policy.minimumSpacingMs) return { outcome:"CADENCE_BLOCKED",attemptId:id,record:before }; if(this.active>=this.policy.maxConcurrent)return {outcome:"CADENCE_BLOCKED",attemptId:id,record:before}; const claim=await this.options.store.claim(id,this.workerId,this.now(),this.policy.leaseMs); if(!claim)return {outcome:"STALE_LEASE",attemptId:id,record:await this.options.store.get(id)}; const permit=await this.options.store.acquirePermit(this.workerId,this.nowMs(),this.policy.maxConcurrent,this.policy.minimumSpacingMs,this.policy.leaseMs); if(!permit){ await this.options.store.fail(id,claim.leaseToken,{...claim.record,lifecycle:"NOT_STARTED" as const,leaseToken:null,leaseExpiresAt:null},this.now()); return {outcome:"CADENCE_BLOCKED",attemptId:id,record:await this.options.store.get(id)}; } this.active++; this.lastRequestMs=this.nowMs();
+    try { const context=await this.resolveContext(claim.record); let record:OperationalAttemptRecord; let provider:ProviderResult; if(claim.record.lifecycle==="RESPONSE_OBSERVED"||claim.record.lifecycle==="PENDING_FENCE"){record=claim.record;provider=this.providerFromRecord(record);} else {const key=await this.options.credentialProvider();if(typeof key!=="string"||!key||/[\r\n]/.test(key))throw new Error("INVALID_CREDENTIAL");const observation=await this.options.execute({context,apiKey:key});provider=interpretOpenSeaExactOrderObservation({context,observation});record=frozen({...claim.record,lifecycle:"RESPONSE_OBSERVED" as const,providerObservedAt:observation.observedAt,httpStatus:observation.httpStatus,transportOutcome:observation.transportOutcome,responseBodySha256:observation.responseBodySha256,rawResponseArtifactHash:observation.rawResponseArtifactHash,normalizedProviderStatus:provider.providerStatus,providerResultStatus:provider.status,providerReasonCodes:provider.reasonCodes,normalizedOrder:provider.normalizedOrder,providerResultReasonCodes:provider.reasonCodes,reasonCodes:provider.reasonCodes});if(!await this.options.store.saveResponse(id,claim.leaseToken,record,this.now()))return await this.stale(id);} const pending=frozen({...record,lifecycle:"PENDING_FENCE" as const});if(claim.record.lifecycle!=="PENDING_FENCE"&&!await this.options.store.saveResponse(id,claim.leaseToken,pending,this.now()))return await this.stale(id);const fence=await this.options.postFence({context,providerResult:provider});const finished=this.fenced(pending,fence);if(!fence.valid){const ok=await this.options.store.fail(id,claim.leaseToken,finished,this.now());return ok?{outcome:"FAILED",attemptId:id,record:finished}:await this.stale(id);}if(provider.retry.retryable&&record.attemptNumber+1<this.policy.maxAttempts){const delay=provider.retry.recommendedPolicyClass==="RATE_LIMITED"?this.policy.rateLimitedDelayMs:this.policy.transientTransportDelayMs;const next=frozen({...rowForContext({context,preVerification:{watermark:finished.postVerificationWatermark??finished.preVerificationWatermark,relevantOrderFingerprint:finished.postRelevantFingerprint??finished.preRelevantFingerprint},createdAt:this.now(),attemptNumber:record.attemptNumber+1}),nextAttemptAt:new Date(Date.parse(this.now())+delay).toISOString()});const retired=frozen({...finished,lifecycle:"FAILED" as const,leaseToken:null,leaseExpiresAt:null,failureClassification:"RETRY_SCHEDULED"});if(!await this.options.store.fail(id,claim.leaseToken,retired,this.now()))return await this.stale(id);await this.options.store.createOrGet(next);return{outcome:"RETRY_SCHEDULED",attemptId:next.attemptId,record:next};}const complete=frozen({...finished,lifecycle:"COMPLETE" as const,verificationCompletedAt:this.now(),failureClassification:provider.retry.retryable?"RETRY_EXHAUSTED":finished.failureClassification});const ok=await this.options.store.complete(id,claim.leaseToken,complete,this.now());return ok?{outcome:"COMPLETE",attemptId:id,record:complete}:await this.stale(id);
+    } catch(e) { const current=await this.options.store.get(id)??claim.record;const failed=frozen({...current,lifecycle:"FAILED" as const,leaseToken:null,leaseExpiresAt:null,failureClassification:e instanceof Error?e.message.slice(0,120):"EXECUTION_FAILED"});const ok=await this.options.store.fail(id,claim.leaseToken,failed,this.now());return ok?{outcome:"FAILED",attemptId:id,record:failed}:await this.stale(id); } finally { await this.options.store.releasePermit(permit.permitId);this.active--; }
   }
-  async createAttempt(input: AttemptCreateInput): Promise<OperationalAttemptRecord> { const row = await this.options.store.createOrGet(rowForContext(input)); this.contexts.set(row.attemptId, input.context); return row; }
-  async runOnce(attemptId: string): Promise<OperationalRunResult> {
-    const before = await this.options.store.get(attemptId); if (!before) return { outcome: "IDLE", attemptId, record: null };
-    const nowMs = this.nowMs(); if (this.lastRequestMs !== null && nowMs - this.lastRequestMs < this.policy.minimumSpacingMs) return { outcome: "CADENCE_BLOCKED", attemptId, record: before };
-    if (this.active >= this.policy.maxConcurrent) return { outcome: "CADENCE_BLOCKED", attemptId, record: before };
-    const claim = await this.options.store.claim(attemptId, this.workerId, this.now(), this.policy.leaseMs); if (!claim) return { outcome: "STALE_LEASE", attemptId, record: await this.options.store.get(attemptId) };
-    this.active++; this.lastRequestMs = this.nowMs();
-    try {
-      const credential = await this.options.credentialProvider(); if (typeof credential !== "string" || credential.length === 0 || /[\r\n]/.test(credential)) throw new Error("INVALID_CREDENTIAL");
-      const context = await this.resolveContext(claim.record);
-      const execution = await this.options.execute({ context, apiKey: credential });
-      const observed = this.withProviderResult(claim.record, execution);
-      if (!await this.options.store.saveResponse(attemptId, claim.leaseToken, observed)) return { outcome: "STALE_LEASE", attemptId, record: await this.options.store.get(attemptId) };
-      const pendingFence = frozen({ ...observed, lifecycle: "PENDING_FENCE" as const });
-      if (!await this.options.store.saveResponse(attemptId, claim.leaseToken, pendingFence)) return { outcome: "STALE_LEASE", attemptId, record: await this.options.store.get(attemptId) };
-      const fence = await this.options.postFence({ context, providerResult: execution.providerResult });
-      const finished = this.withFence(pendingFence, fence, this.now());
-      if (!fence.valid) { await this.options.store.fail(attemptId, claim.leaseToken, finished); return { outcome: "FAILED", attemptId, record: finished }; }
-      if (execution.providerResult.retry.retryable && observed.attemptNumber + 1 < this.policy.maxAttempts) {
-        const delay = execution.providerResult.retry.recommendedPolicyClass === "RATE_LIMITED" ? this.policy.rateLimitedDelayMs : this.policy.transientTransportDelayMs;
-        const nextAttemptAt = new Date(Date.parse(this.now()) + delay).toISOString();
-        const nextBase = rowForContext({ context, preVerification: { watermark: finished.postVerificationWatermark ?? finished.preVerificationWatermark, relevantOrderFingerprint: finished.postRelevantFingerprint ?? finished.preRelevantFingerprint }, createdAt: this.now(), attemptNumber: observed.attemptNumber + 1 });
-        const next = frozen({ ...nextBase, nextAttemptAt });
-        const retired = frozen({ ...finished, lifecycle: "FAILED" as const, leaseToken: null, leaseExpiresAt: null, failureClassification: "RETRY_SCHEDULED" });
-        await this.options.store.fail(attemptId, claim.leaseToken, retired);
-        await this.options.store.createOrGet(next);
-        return { outcome: "RETRY_SCHEDULED", attemptId: next.attemptId, record: next };
-      }
-      const complete = frozen({ ...finished, lifecycle: "COMPLETE" as const, verificationCompletedAt: this.now() }); await this.options.store.complete(attemptId, claim.leaseToken, complete); return { outcome: "COMPLETE", attemptId, record: complete };
-    } catch (error) {
-      const failed = frozen({ ...claim.record, lifecycle: "FAILED" as const, leaseExpiresAt: null, failureClassification: error instanceof Error ? error.message.slice(0, 120) : "EXECUTION_FAILED" });
-      await this.options.store.fail(attemptId, claim.leaseToken, failed); return { outcome: "FAILED", attemptId, record: failed };
-    } finally { this.active--; }
-  }
-  async runDue(limit = this.policy.maxConcurrent): Promise<readonly OperationalRunResult[]> { const rows = await this.options.store.listDue(this.now(), limit); return Promise.all(rows.map((row) => this.runOnce(row.attemptId))); }
-  async reclaimExpired(): Promise<number> { return this.options.store.reclaimExpired(this.now()); }
-  private async resolveContext(record: OperationalAttemptRecord): Promise<TargetedVerifierContext> { const local = this.contexts.get(record.attemptId); if (local) return local; if (this.options.contextResolver) return this.options.contextResolver(record); throw new Error("CONTEXT_RECONSTRUCTION_REQUIRED"); }
-  private withProviderResult(record: OperationalAttemptRecord, execution: TargetedVerifierExecution): OperationalAttemptRecord { const p = execution.providerResult; return frozen({ ...record, lifecycle: "RESPONSE_OBSERVED" as const, verificationCompletedAt: null, providerObservedAt: p.observedAt, httpStatus: p.httpStatus, transportOutcome: p.retry.recommendedPolicyClass === "RATE_LIMITED" ? "HTTP" : p.status === "TRANSPORT_FAILED" ? (p.reasonCodes.includes("REQUEST_TIMEOUT") ? "TIMEOUT" : "CONNECTION_RESET") : "HTTP", responseBodySha256: p.responseBodySha256, rawResponseArtifactHash: p.rawResponseArtifactHash, normalizedProviderStatus: p.providerStatus, providerResultStatus: p.status, providerReasonCodes: p.reasonCodes, normalizedOrder: p.normalizedOrder, providerResultReasonCodes: p.reasonCodes, reasonCodes: p.reasonCodes, failureClassification: null }); }
-  private withFence(record: OperationalAttemptRecord, fence: PostVerificationFenceResult, _now: string): OperationalAttemptRecord {
-    const resultStatus = fence.valid ? record.providerResultStatus : fence.status === "STALE" ? "STALE" : "RECONCILIATION_REQUIRED";
-    const semantic = sha256Canonical(semanticEvidenceMaterial({ ...record, postVerificationWatermark: fence.postVerification.watermark, postRelevantFingerprint: fence.postVerification.relevantOrderFingerprint, resultStatus, reasonCodes: fence.reasonCodes } as unknown as Record<string, unknown>));
-    return frozen({ ...record, postVerificationWatermark: fence.postVerification.watermark, postRelevantFingerprint: fence.postVerification.relevantOrderFingerprint, semanticEvidenceHash: semantic, providerReasonCodes: [...record.providerReasonCodes].sort(), providerResultReasonCodes: [...record.providerResultReasonCodes].sort(), reasonCodes: [...fence.reasonCodes].sort(), failureClassification: fence.valid ? record.failureClassification : fence.status });
-  }
+  async runDue(limit=2):Promise<readonly OperationalRunResult[]>{return Promise.all((await this.options.store.listDue(this.now(),limit)).map(r=>this.runOnce(r.attemptId)));} async reclaimExpired():Promise<number>{return this.options.store.reclaimExpired(this.now());}
+  private async resolveContext(r:OperationalAttemptRecord):Promise<TargetedVerifierContext>{const local=this.contexts.get(r.attemptId);if(local)return local;if(this.options.contextResolver)return this.options.contextResolver(r);throw new Error("CONTEXT_RECONSTRUCTION_REQUIRED");}
+  private providerFromRecord(r:OperationalAttemptRecord):ProviderResult{return{status:r.providerResultStatus??"MALFORMED_RESPONSE",reasonCodes:r.providerResultReasonCodes,providerStatus:r.normalizedProviderStatus,normalizedOrder:r.normalizedOrder,observedAt:r.providerObservedAt,responseBodySha256:r.responseBodySha256,rawResponseArtifactHash:r.rawResponseArtifactHash,httpStatus:r.httpStatus,retry:{retryable:false,retryReason:"DURABLE_RECOVERY",recommendedPolicyClass:"NONE"},authorityGranted:false,deactivationAuthorityGranted:false};}
+  private fenced(r:OperationalAttemptRecord,f:PostVerificationFenceResult):OperationalAttemptRecord{const resultStatus=f.valid?r.providerResultStatus:f.status==="STALE"?"STALE":"RECONCILIATION_REQUIRED";const semantic=sha256Canonical(semanticEvidenceMaterial({...r,postVerificationWatermark:f.postVerification.watermark,postRelevantFingerprint:f.postVerification.relevantOrderFingerprint,resultStatus,reasonCodes:f.reasonCodes} as unknown as Record<string,unknown>));return frozen({...r,postVerificationWatermark:f.postVerification.watermark,postRelevantFingerprint:f.postVerification.relevantOrderFingerprint,semanticEvidenceHash:semantic,reasonCodes:[...f.reasonCodes].sort(),failureClassification:f.valid?r.failureClassification:f.status});}
 }
 
-/** SQL storage boundary. It stores only the sanitized operational record JSON; no listing row is mutated. */
-export class PostgresTargetedVerifierAttemptStore implements TargetedVerifierAttemptStore {
-  constructor(private readonly pool: DbPool) {}
-  private decode(row: { payload: OperationalAttemptRecord }): OperationalAttemptRecord { return row.payload; }
-  async createOrGet(input: OperationalAttemptRecord): Promise<OperationalAttemptRecord> { const result = await this.pool.query<{ payload: OperationalAttemptRecord }>(`INSERT INTO public.targeted_verifier_attempts (attempt_id, idempotency_key, attempt_number, order_hash, sweep_id, lifecycle, next_attempt_at, payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key RETURNING payload`, [input.attemptId, input.idempotencyKey, input.attemptNumber, input.orderHash, input.sweepId, input.lifecycle, input.nextAttemptAt, JSON.stringify(input)]); return this.decode(result.rows[0]); }
-  async get(attemptId: string): Promise<OperationalAttemptRecord | null> { const result = await this.pool.query<{ payload: OperationalAttemptRecord }>(`SELECT payload FROM public.targeted_verifier_attempts WHERE attempt_id=$1`, [attemptId]); return result.rows[0] ? this.decode(result.rows[0]) : null; }
-  async listDue(now: string, limit: number): Promise<readonly OperationalAttemptRecord[]> { const result = await this.pool.query<{ payload: OperationalAttemptRecord }>(`SELECT payload FROM public.targeted_verifier_attempts WHERE lifecycle='NOT_STARTED' AND (next_attempt_at IS NULL OR next_attempt_at <= $1) ORDER BY created_at, attempt_id LIMIT $2`, [now, limit]); return result.rows.map((row) => this.decode(row)); }
-  async claim(id: string, workerId: string, now: string, leaseMs: number): Promise<ClaimedAttempt | null> { const token = `${workerId}:${randomUUID()}`; const expires = leaseUntil(now, leaseMs); const result = await this.pool.query<{ payload: OperationalAttemptRecord }>(`UPDATE public.targeted_verifier_attempts SET lifecycle='REQUEST_PENDING', claimed_at=$2, lease_expires_at=$3, lease_token=$4, payload=jsonb_set(jsonb_set(jsonb_set(jsonb_set(payload,'{lifecycle}','"REQUEST_PENDING"'),'{claimedAt}',to_jsonb($2::text)),'{leaseExpiresAt}',to_jsonb($3::text)),'{leaseToken}',to_jsonb($4::text)) WHERE attempt_id=$1 AND lifecycle='NOT_STARTED' AND (next_attempt_at IS NULL OR next_attempt_at <= $2) RETURNING payload`, [id, now, expires, token]); return result.rows[0] ? { record: this.decode(result.rows[0]), leaseToken: token } : null; }
-  private async cas(id: string, token: string, record: OperationalAttemptRecord, releaseLease: boolean): Promise<boolean> { const result = await this.pool.query(`UPDATE public.targeted_verifier_attempts SET lifecycle=$3, payload=$4::jsonb, lease_token=${releaseLease ? "NULL" : "$2"}, lease_expires_at=${releaseLease ? "NULL" : "lease_expires_at"} WHERE attempt_id=$1 AND lease_token=$2`, [id, token, record.lifecycle, JSON.stringify(record)]); return result.rowCount === 1; }
-  async saveResponse(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record, false); }
-  async complete(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record, true); }
-  async fail(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record, true); }
-  async scheduleRetry(id: string, token: string, record: OperationalAttemptRecord): Promise<boolean> { return this.cas(id, token, record, true); }
-  async reclaimExpired(now: string): Promise<number> { const result = await this.pool.query(`UPDATE public.targeted_verifier_attempts SET lifecycle='FAILED', lease_token=NULL, lease_expires_at=NULL, failure_classification='REQUEST_OUTCOME_UNCERTAIN', payload=jsonb_set(payload,'{lifecycle}','"FAILED"') WHERE lifecycle='REQUEST_PENDING' AND lease_expires_at < $1`, [now]); return result.rowCount ?? 0; }
-}
-
-export function operationalIdempotencyKey(context: TargetedVerifierContext, attemptNumber = 0): string { return sha256Canonical({ sweepId: context.sweepId, orderHash: context.orderHash, candidateArtifactHash: context.candidateArtifactHash, barrierArtifactHash: context.barrierArtifactHash, providerContractVersion: OPENSEA_ORDER_CONTRACT_VERSION, attemptNumber }); }
-export function operationalSemanticEvidenceHash(record: OperationalAttemptRecord): string { return sha256Canonical(semanticEvidenceMaterial(record as unknown as Record<string, unknown>)); }
-export function operationalRecordCanonicalBytes(record: OperationalAttemptRecord): string { return canonicalEvidence(record); }
+export class PostgresTargetedVerifierAttemptStore implements TargetedVerifierAttemptStore { constructor(private readonly pool:DbPool){} private decode(row:{payload:OperationalAttemptRecord}):OperationalAttemptRecord{return row.payload;} async createOrGet(i:OperationalAttemptRecord):Promise<OperationalAttemptRecord>{const r=await this.pool.query<{payload:OperationalAttemptRecord}>(`INSERT INTO public.targeted_verifier_attempts (attempt_id,idempotency_key,attempt_number,order_hash,sweep_id,lifecycle,next_attempt_at,payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key RETURNING payload`,[i.attemptId,i.idempotencyKey,i.attemptNumber,i.orderHash,i.sweepId,i.lifecycle,i.nextAttemptAt,JSON.stringify(i)]);return this.decode(r.rows[0]);} async get(id:string):Promise<OperationalAttemptRecord|null>{const r=await this.pool.query<{payload:OperationalAttemptRecord}>(`SELECT payload FROM public.targeted_verifier_attempts WHERE attempt_id=$1`,[id]);return r.rows[0]?this.decode(r.rows[0]):null;} async listDue(now:string,limit:number):Promise<readonly OperationalAttemptRecord[]>{const r=await this.pool.query<{payload:OperationalAttemptRecord[]}>(`SELECT payload FROM public.targeted_verifier_attempts WHERE lifecycle IN ('NOT_STARTED','RESPONSE_OBSERVED','PENDING_FENCE') AND (next_attempt_at IS NULL OR next_attempt_at <= $1) ORDER BY created_at,attempt_id LIMIT $2`,[now,limit]);return (r.rows as unknown as {payload:OperationalAttemptRecord}[]).map(x=>this.decode(x));} async claim(id:string,w:string,now:string,ms:number):Promise<ClaimedAttempt|null>{const t=`${w}:${randomUUID()}`,e=leaseUntil(now,ms);const r=await this.pool.query<{payload:OperationalAttemptRecord}>(`UPDATE public.targeted_verifier_attempts SET lifecycle=CASE WHEN lifecycle='NOT_STARTED' THEN 'REQUEST_PENDING' ELSE lifecycle END,claimed_at=$2,lease_expires_at=$3,lease_token=$4,payload=jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(payload,'{lifecycle}',to_jsonb(CASE WHEN lifecycle='NOT_STARTED' THEN 'REQUEST_PENDING' ELSE lifecycle END)),'{claimedAt}',to_jsonb($2::text)),'{leaseExpiresAt}',to_jsonb($3::text)),'{leaseToken}',to_jsonb($4::text)),'{verificationStartedAt}',COALESCE(payload->'verificationStartedAt',to_jsonb($2::text))) WHERE attempt_id=$1 AND lifecycle IN ('NOT_STARTED','RESPONSE_OBSERVED','PENDING_FENCE') AND (lifecycle<>'NOT_STARTED' OR lease_token IS NULL OR lease_expires_at <= $2) AND (next_attempt_at IS NULL OR next_attempt_at <= $2) RETURNING payload`,[id,now,e,t]);return r.rows[0]?{record:this.decode(r.rows[0]),leaseToken:t}:null;} private async cas(id:string,t:string,r:OperationalAttemptRecord,at:string,release:boolean):Promise<boolean>{const q=await this.pool.query(`UPDATE public.targeted_verifier_attempts SET lifecycle=$3,payload=$4::jsonb,lease_token=${release?"NULL":"$2"},lease_expires_at=${release?"NULL":"lease_expires_at"} WHERE attempt_id=$1 AND lease_token=$2 AND lifecycle IN ('REQUEST_PENDING','RESPONSE_OBSERVED','PENDING_FENCE') AND lease_expires_at > $5`,[id,t,r.lifecycle,JSON.stringify(r),at]);return q.rowCount===1;} saveResponse(id:string,t:string,r:OperationalAttemptRecord,at=new Date().toISOString()){return this.cas(id,t,r,at,false);} complete(id:string,t:string,r:OperationalAttemptRecord,at=new Date().toISOString()){return this.cas(id,t,r,at,true);} fail(id:string,t:string,r:OperationalAttemptRecord,at=new Date().toISOString()){return this.cas(id,t,r,at,true);} scheduleRetry(id:string,t:string,r:OperationalAttemptRecord,at=new Date().toISOString()){return this.cas(id,t,r,at,true);} async reclaimExpired(now:string):Promise<number>{const r=await this.pool.query(`UPDATE public.targeted_verifier_attempts SET lifecycle=CASE WHEN lifecycle='REQUEST_PENDING' THEN 'FAILED' ELSE lifecycle END,lease_token=NULL,lease_expires_at=NULL,failure_classification=CASE WHEN lifecycle='REQUEST_PENDING' THEN 'REQUEST_OUTCOME_UNCERTAIN' ELSE failure_classification END,payload=jsonb_set(jsonb_set(jsonb_set(payload,'{leaseToken}','null'),'{leaseExpiresAt}','null'),'{lifecycle}',CASE WHEN lifecycle='REQUEST_PENDING' THEN '"FAILED"' ELSE to_jsonb(lifecycle)::text END) WHERE lifecycle IN ('REQUEST_PENDING','RESPONSE_OBSERVED','PENDING_FENCE') AND lease_expires_at <= $1`,[now]);return r.rowCount??0;} async acquirePermit(workerId:string,nowMs:number,max:number,spacing:number,leaseMs:number):Promise<{readonly permitId:string;readonly leaseExpiresAtMs:number}|null>{const c=await this.pool.connect();const id=`${workerId}:${randomUUID()}`,started=new Date(nowMs).toISOString(),expires=new Date(nowMs+leaseMs).toISOString();try{await c.query("BEGIN");await c.query("SELECT pg_advisory_xact_lock(hashtext('targeted_verifier_permits'))");await c.query("DELETE FROM public.targeted_verifier_permits WHERE expires_at <= now()");const q=await c.query<{count:string;last_start_at:string|null}>("SELECT count(*)::text AS count,max(last_start_at) AS last_start_at FROM public.targeted_verifier_permits");const count=Number(q.rows[0]?.count??0),last=q.rows[0]?.last_start_at?Date.parse(q.rows[0].last_start_at):null;if(count>=max||(last!==null&&nowMs-last<spacing)){await c.query("COMMIT");return null;}await c.query("INSERT INTO public.targeted_verifier_permits (permit_id,worker_id,started_at,expires_at,last_start_at) VALUES ($1,$2,$3,$4,$3)",[id,workerId,started,expires]);await c.query("COMMIT");return{permitId:id,leaseExpiresAtMs:nowMs+leaseMs};}catch(e){await c.query("ROLLBACK");throw e;}finally{c.release();}} async releasePermit(id:string):Promise<void>{await this.pool.query("DELETE FROM public.targeted_verifier_permits WHERE permit_id=$1",[id]);} }
+export function operationalIdempotencyKey(context:TargetedVerifierContext,attemptNumber=0):string{return sha256Canonical({sweepId:context.sweepId,generationRootHash:context.generationRootHash,orderHash:context.orderHash,candidateArtifactHash:context.candidateArtifactHash,barrierArtifactHash:context.barrierArtifactHash,providerContractVersion:OPENSEA_ORDER_CONTRACT_VERSION,attemptNumber});} export function operationalSemanticEvidenceHash(record:OperationalAttemptRecord):string{return sha256Canonical(semanticEvidenceMaterial(record as unknown as Record<string,unknown>));} export function operationalRecordCanonicalBytes(record:OperationalAttemptRecord):string{return canonicalEvidence(record);}

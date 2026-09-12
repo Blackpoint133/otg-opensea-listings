@@ -30,6 +30,7 @@ probe_result.json
 !/sql/002_add_journal_processing_lifecycle.sql
 !/sql/003_add_inbox_attempt_ledger.sql
 !/sql/004_create_targeted_verifier_attempts.sql
+!/sql/005_add_targeted_verifier_permits.sql
 *.dump
 *.csv
 /exports/

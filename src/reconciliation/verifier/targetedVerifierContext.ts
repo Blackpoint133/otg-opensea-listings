@@ -8,6 +8,15 @@ export interface TargetedVerifierContextMetadata { readonly preVerification: Jou
 const TRUSTED_CONTEXTS = new WeakSet<object>();
 export function isTrustedTargetedVerifierContext(value: unknown): value is TargetedVerifierContext { return value !== null && typeof value === "object" && TRUSTED_CONTEXTS.has(value); }
 
+export function advanceTrustedTargetedVerifierContext(context: TargetedVerifierContext, preVerification: JournalFenceSnapshot): TargetedVerifierContext {
+  if (!isTrustedTargetedVerifierContext(context)) throw new Error("UNTRUSTED_TARGETED_VERIFIER_CONTEXT");
+  const advanced = deepFreeze({ ...structuredClone(context), preVerification: structuredClone(preVerification) });
+  const eligibility = validateTargetedVerifierEligibility(advanced);
+  if (!eligibility.valid) throw new Error(`VERIFIER_NOT_ELIGIBLE:${eligibility.reasons.join(",")}`);
+  TRUSTED_CONTEXTS.add(advanced);
+  return advanced;
+}
+
 export function deriveTargetedVerifierContext(evidence: IntegratedEvidenceResult, orderHash: string, metadata: TargetedVerifierContextMetadata): TargetedVerifierContext {
   if (!isTrustedReconstructedEvidence(evidence) || evidence.status !== "VALID" || !evidence.candidate || !evidence.barrier || !evidence.candidateRef || !evidence.barrierRef) throw new Error("UNTRUSTED_INTEGRATED_EVIDENCE");
   const payload = evidence.candidate.payload as Record<string, unknown>;

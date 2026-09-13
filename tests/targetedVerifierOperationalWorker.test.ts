@@ -13,7 +13,8 @@ import { adaptOpenSeaExactOrder } from "../src/reconciliation/verifier/openSeaEx
 import { interpretOpenSeaExactOrderObservation } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
 import { rehydrateProviderResult, validateProviderResult } from "../src/reconciliation/verifier/targetedVerifierNormalizer.js";
 import { operationalIdempotencyKey } from "../src/reconciliation/verifier/targetedVerifierOperationalWorker.js";
-import { attemptIdentity, eventFingerprint } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
+import { attemptIdentity, cloneTargetedVerifierContext, eventFingerprint } from "../src/reconciliation/verifier/targetedVerifierPolicy.js";
+import { deepFreeze } from "../src/reconciliation/evidence/canonicalEvidence.js";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 // @ts-expect-error production construction requires a reader and rejects arbitrary postFence
@@ -39,6 +40,25 @@ function worker(store: InMemoryTargetedVerifierAttemptStore, context: TargetedVe
 }
 async function create(w: TargetedVerifierOperationalWorker, c: TargetedVerifierContext) { return w.createAttempt({ context: c, preVerification: c.preVerification, createdAt: NOW }); }
 
+const journalInvalidationReasons = ["FENCE_ORDER_MISMATCH", "AMBIGUOUS_JOURNAL_ORDERING", "WATERMARK_REGRESSION", "RELEVANT_ORDER_EVENT_ACROSS_FENCE"] as const;
+function providerEvidence(record: OperationalAttemptRecord) {
+  return {
+    providerObservedAt: record.providerObservedAt,
+    httpStatus: record.httpStatus,
+    transportOutcome: record.transportOutcome,
+    responseBodySha256: record.responseBodySha256,
+    rawResponseArtifactHash: record.rawResponseArtifactHash,
+    normalizedProviderStatus: record.normalizedProviderStatus,
+    providerResultStatus: record.providerResultStatus,
+    providerReasonCodes: record.providerReasonCodes,
+    providerResultReasonCodes: record.providerResultReasonCodes,
+    normalizedOrder: record.normalizedOrder,
+    retry: record.retry,
+    preVerificationWatermark: record.preVerificationWatermark,
+    preRelevantFingerprint: record.preRelevantFingerprint
+  };
+}
+
 test("confirmed provider status families remain read-only", async () => { const { root, contexts } = await setup(); try { for (const [status, provider] of [["ACTIVE_CONFIRMED", "ACTIVE"], ["INACTIVE_CONFIRMED", "INACTIVE"], ["EXPIRED_CONFIRMED", "EXPIRED"], ["TERMINAL_CONFIRMED", "FULFILLED"]] as const) { const store = new InMemoryTargetedVerifierAttemptStore(); const w = worker(store, contexts[0], result(status, retryNone, provider)); const a = await create(w, contexts[0]); const r = await w.runOnce(a.attemptId); assert.equal(r.outcome, "COMPLETE"); assert.equal(r.record?.authorityGranted, false); assert.equal(r.record?.deactivationAuthorityGranted, false); } } finally { await disposeTrustedContexts(root); } });
 
 test("idempotent attempts, lifecycle completion and authority invariants", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); const w = worker(store, contexts[0], result("INACTIVE_CONFIRMED", retryNone, "INACTIVE")); const a = await create(w, contexts[0]); const b = await create(w, contexts[0]); assert.equal(a.attemptId, b.attemptId); const run = await w.runOnce(a.attemptId); assert.equal(run.outcome, "COMPLETE"); assert.equal(run.record?.lifecycle, "COMPLETE"); assert.equal(run.record?.authorityGranted, false); assert.equal(run.record?.deactivationAuthorityGranted, false); } finally { await disposeTrustedContexts(root); } });
@@ -49,7 +69,7 @@ test("expired lease is reclaimed fail-closed", async () => { const { root, conte
 
 test("retryable results are delayed and bounded", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); const w = worker(store, contexts[0], result("RATE_LIMITED", retryRate), { policy: { maxAttempts: 2, rateLimitedDelayMs: 60_000 } }); const a = await create(w, contexts[0]); const run = await w.runOnce(a.attemptId); assert.equal(run.outcome, "RETRY_SCHEDULED"); assert.notEqual(run.attemptId, a.attemptId); assert.equal(run.record?.nextAttemptAt, "2026-01-01T00:01:00.000Z"); const source = await store.get(a.attemptId); assert.ok(source); assert.equal(source.lifecycle, "FAILED"); assert.equal(source.failureClassification, "RETRY_SCHEDULED"); assert.equal(source.providerResultStatus, "RATE_LIMITED"); assert.equal(source.finalResultStatus, "RATE_LIMITED"); assert.equal(source.semanticEvidenceHash, operationalSemanticEvidenceHash(source)); const child = await store.get(run.attemptId!); assert.ok(child); assert.equal(child.lifecycle, "NOT_STARTED"); assert.equal(child.attemptNumber, source.attemptNumber + 1); assert.equal(child.providerResultStatus, null); assert.equal(child.finalResultStatus, null); assert.equal(child.semanticEvidenceHash, null); assert.equal(child.failureClassification, null); assert.equal(child.authorityGranted, false); assert.equal(child.deactivationAuthorityGranted, false); } finally { await disposeTrustedContexts(root); } });
 
-test("transient timeout is retryable but malformed is terminal", async () => { const { root, contexts } = await setup(); try { const s1 = new InMemoryTargetedVerifierAttemptStore(); const w1 = worker(s1, contexts[0], result("TRANSPORT_FAILED", retryTransient), { policy: { maxAttempts: 1 } }); const a1 = await create(w1, contexts[0]); const exhaustedRun = await w1.runOnce(a1.attemptId); assert.equal(exhaustedRun.outcome, "COMPLETE"); const exhausted = await s1.get(a1.attemptId); assert.ok(exhausted); assert.equal(exhausted.lifecycle, "COMPLETE"); assert.equal(exhausted.failureClassification, "RETRY_EXHAUSTED"); assert.equal(exhausted.providerResultStatus, "TRANSPORT_FAILED"); assert.equal(exhausted.finalResultStatus, "TRANSPORT_FAILED"); assert.equal(exhausted.finalResultStatus, exhausted.providerResultStatus); assert.notEqual(exhausted.semanticEvidenceHash, null); assert.equal(exhausted.semanticEvidenceHash, operationalSemanticEvidenceHash(exhausted)); assert.notEqual(exhausted.finalResultStatus, "RETRY_EXHAUSTED"); assert.equal(exhausted.authorityGranted, false); assert.equal(exhausted.deactivationAuthorityGranted, false); const s2 = new InMemoryTargetedVerifierAttemptStore(); const w2 = worker(s2, contexts[0], result("MALFORMED_RESPONSE")); const a2 = await create(w2, contexts[0]); assert.equal((await w2.runOnce(a2.attemptId)).outcome, "COMPLETE"); } finally { await disposeTrustedContexts(root); } });
+test("transient timeout is retryable but malformed is terminal", async () => { const { root, contexts } = await setup(); try { const s1 = new InMemoryTargetedVerifierAttemptStore(); const w1 = worker(s1, contexts[0], result("TRANSPORT_FAILED", retryTransient), { policy: { maxAttempts: 1 } }); const a1 = await create(w1, contexts[0]); const exhaustedRun = await w1.runOnce(a1.attemptId); assert.equal(exhaustedRun.outcome, "COMPLETE"); const exhausted = await s1.get(a1.attemptId); assert.ok(exhausted); assert.equal(exhausted.lifecycle, "COMPLETE"); assert.equal(exhausted.failureClassification, "RETRY_EXHAUSTED"); assert.equal(exhausted.providerResultStatus, "TRANSPORT_FAILED"); assert.equal(exhausted.finalResultStatus, "TRANSPORT_FAILED"); assert.equal(exhausted.finalResultStatus, exhausted.providerResultStatus); assert.notEqual(exhausted.semanticEvidenceHash, null); assert.equal(exhausted.semanticEvidenceHash, operationalSemanticEvidenceHash(exhausted)); assert.notEqual(exhausted.finalResultStatus, "RETRY_EXHAUSTED"); assert.equal(exhausted.authorityGranted, false); assert.equal(exhausted.deactivationAuthorityGranted, false); assert.equal(await s1.get(attemptIdentity(contexts[0], 1)), null); const s2 = new InMemoryTargetedVerifierAttemptStore(); const w2 = worker(s2, contexts[0], result("MALFORMED_RESPONSE")); const a2 = await create(w2, contexts[0]); assert.equal((await w2.runOnce(a2.attemptId)).outcome, "COMPLETE"); assert.equal(await s2.get(attemptIdentity(contexts[0], 1)), null); } finally { await disposeTrustedContexts(root); } });
 
 test("post-fence invalidation and context reconstruction fail closed", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); const w = worker(store, contexts[0], result("ACTIVE_CONFIRMED", retryNone, "ACTIVE"), { postFence: async () => fence(false, "STALE") }); const a = await create(w, contexts[0]); const r = await w.runOnce(a.attemptId); assert.equal(r.outcome, "FAILED"); assert.equal(r.record?.failureClassification, "STALE"); const store2 = new InMemoryTargetedVerifierAttemptStore(); const w2 = worker(store2, contexts[0], result("UNKNOWN")); const a2 = await create(w2, contexts[0]); const restarted = __createTargetedVerifierOperationalWorkerForTest({ store: store2, workerId: "restart", now: () => NOW, nowMs: () => 0, credentialProvider: async () => "x", execute: async () => observation(contexts[0], "UNKNOWN"), postFence: async () => fence() }); assert.equal((await restarted.runOnce(a2.attemptId)).outcome, "FAILED"); } finally { await disposeTrustedContexts(root); } });
 
@@ -104,10 +124,267 @@ test("legacy hashed records and malformed final statuses fail closed", async () 
 
 test("production invalidation recovery preserves an exact provider status", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); const seed = worker(store, contexts[0], result("UNKNOWN")); const created = await create(seed, contexts[0]); const claim = await store.claim(created.attemptId, "old", NOW, 10000); assert.ok(claim); const obs = observation(contexts[0], "UNKNOWN"); const provider = interpretOpenSeaExactOrderObservation({ context: contexts[0], observation: obs }); const durable = { ...claim.record, lifecycle: "PENDING_FENCE" as const, providerObservedAt: provider.observedAt, httpStatus: provider.httpStatus, transportOutcome: obs.transportOutcome, responseBodySha256: provider.responseBodySha256, rawResponseArtifactHash: provider.rawResponseArtifactHash, normalizedProviderStatus: provider.providerStatus, providerResultStatus: provider.status, providerResultReasonCodes: provider.reasonCodes, normalizedOrder: provider.normalizedOrder, reasonCodes: provider.reasonCodes, retry: provider.retry }; (store as unknown as { rows: Map<string, OperationalAttemptRecord> }).rows.set(created.attemptId, durable); await store.reclaimExpired("2026-01-01T00:00:20.000Z"); const before = await store.get(created.attemptId); assert.ok(before); assert.equal(before.finalResultStatus, null); assert.equal(before.semanticEvidenceHash, null); const reader = { readSnapshot: async () => changedSnapshot(contexts[0]) }; const w = createTargetedVerifierOperationalWorker({ store, snapshotReader: reader, workerId: "invalidation-recovery-exact", now: () => "2026-01-01T00:00:20.000Z", contextResolver: async () => contexts[0], credentialProvider: async () => { throw new Error("NO_CREDENTIAL"); }, execute: async () => { throw new Error("NO_EXECUTE"); } }); const run = await w.runOnce(created.attemptId); assert.equal(run.outcome, "FAILED"); const final = await store.get(created.attemptId); assert.ok(final); assert.equal(final.providerResultStatus, provider.status); assert.equal(final.finalResultStatus, "RECONCILIATION_REQUIRED"); assert.notEqual(final.providerResultStatus, final.finalResultStatus); assert.ok(final.reasonCodes.includes("RELEVANT_ORDER_EVENT_ACROSS_FENCE")); assert.equal(final.semanticEvidenceHash, operationalSemanticEvidenceHash(final)); } finally { await disposeTrustedContexts(root); } });
 
-test("local fence failure preserves durable provider evidence and recovers without replay", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); let reads = 0, executions = 0, permits = 0, credentials = 0; const failingReader = { readSnapshot: async () => { reads++; throw new Error("TEST_FENCE_READ_FAILURE"); } }; const w = createTargetedVerifierOperationalWorker({ store, snapshotReader: failingReader, workerId: "fence-failure", now: () => NOW, nowMs: () => 0, credentialProvider: async () => { credentials++; return "key"; }, execute: async () => { executions++; return observation(contexts[0], "UNKNOWN"); }, contextResolver: async () => contexts[0], policy: { leaseMs: 1000 } }); const created = await w.createAttempt({ context: contexts[0], preVerification: contexts[0].preVerification, createdAt: NOW }); const originalPermit = store.acquirePermit.bind(store); store.acquirePermit = async (...args) => { permits++; return originalPermit(...args); }; const first = await w.runOnce(created.attemptId); assert.equal(first.outcome, "FAILED"); const observed = await store.get(created.attemptId); assert.ok(observed); assert.equal(observed.lifecycle, "PENDING_FENCE"); assert.notEqual(observed.providerResultStatus, null); assert.equal(executions, 1); const stableSnapshot = contexts[0].preVerification; await store.reclaimExpired("2026-01-01T00:00:02.000Z"); let recoveryReads = 0; const restarted = createTargetedVerifierOperationalWorker({ store, snapshotReader: { readSnapshot: async () => { recoveryReads++; return stableSnapshot; } }, workerId: "fence-restart", now: () => "2026-01-01T00:00:02.000Z", nowMs: () => 2000, credentialProvider: async () => { credentials++; throw new Error("NO_CREDENTIAL"); }, execute: async () => { executions++; throw new Error("NO_EXECUTE"); }, contextResolver: async () => contexts[0], policy: { leaseMs: 1000 } }); const second = await restarted.runOnce(created.attemptId); assert.equal(second.outcome, "COMPLETE"); assert.equal(permits, 1); assert.equal(credentials, 1); assert.equal(executions, 1); assert.equal(reads, 1); assert.equal(recoveryReads, 1); } finally { await disposeTrustedContexts(root); } });
+test("local fence failure preserves durable provider evidence and recovers without replay", async () => {
+  const { root, contexts } = await setup();
+  try {
+    const store = new InMemoryTargetedVerifierAttemptStore();
+    let snapshotReads = 0, executions = 0, permits = 0, credentials = 0;
+    let savedProviderEvidence: ReturnType<typeof providerEvidence> | null = null;
+    const saveResponse = store.saveResponse.bind(store);
+    store.saveResponse = async (...args) => {
+      if (args[2].lifecycle === "RESPONSE_OBSERVED") savedProviderEvidence = providerEvidence(args[2]);
+      return saveResponse(...args);
+    };
+    const w = createTargetedVerifierOperationalWorker({
+      store,
+      snapshotReader: { readSnapshot: async () => { snapshotReads++; throw new Error("TEST_FENCE_READ_FAILURE"); } },
+      workerId: "fence-failure",
+      now: () => NOW,
+      nowMs: () => 0,
+      credentialProvider: async () => { credentials++; return "key"; },
+      execute: async ({ context }) => { executions++; return observation(context, "UNKNOWN"); },
+      contextResolver: async () => contexts[0],
+      policy: { leaseMs: 1000 }
+    });
+    const created = await w.createAttempt({ context: contexts[0], preVerification: contexts[0].preVerification, createdAt: NOW });
+    const originalPermit = store.acquirePermit.bind(store);
+    store.acquirePermit = async (...args) => { permits++; return originalPermit(...args); };
+    const first = await w.runOnce(created.attemptId);
+    assert.equal(first.outcome, "FAILED");
+    const observed = await store.get(created.attemptId);
+    assert.ok(observed);
+    assert.equal(observed.lifecycle, "PENDING_FENCE");
+    assert.ok(savedProviderEvidence);
+    assert.deepEqual(providerEvidence(observed), savedProviderEvidence);
+    assert.equal(observed.finalResultStatus, null);
+    assert.equal(observed.semanticEvidenceHash, null);
+    assert.equal(observed.postVerificationWatermark, null);
+    assert.equal(observed.postRelevantFingerprint, null);
+    for (const reason of journalInvalidationReasons) assert.equal(observed.reasonCodes.includes(reason), false);
+    assert.equal(permits, 1);
+    assert.equal(credentials, 1);
+    assert.equal(executions, 1);
+    assert.equal(snapshotReads, 1);
+    await store.reclaimExpired("2026-01-01T00:00:02.000Z");
+    const beforeRecovery = { permits, credentials, executions, snapshotReads };
+    const restarted = createTargetedVerifierOperationalWorker({
+      store,
+      snapshotReader: { readSnapshot: async () => { snapshotReads++; return contexts[0].preVerification; } },
+      workerId: "fence-restart",
+      now: () => "2026-01-01T00:00:02.000Z",
+      nowMs: () => 2000,
+      credentialProvider: async () => { credentials++; throw new Error("NO_CREDENTIAL"); },
+      execute: async () => { executions++; throw new Error("NO_EXECUTE"); },
+      contextResolver: async () => contexts[0],
+      policy: { leaseMs: 1000 }
+    });
+    const second = await restarted.runOnce(created.attemptId);
+    assert.equal(second.outcome, "COMPLETE");
+    assert.deepEqual(
+      { permits: permits - beforeRecovery.permits, credentials: credentials - beforeRecovery.credentials, executions: executions - beforeRecovery.executions, snapshotReads: snapshotReads - beforeRecovery.snapshotReads },
+      { permits: 0, credentials: 0, executions: 0, snapshotReads: 1 }
+    );
+  } finally { await disposeTrustedContexts(root); }
+});
 
-test("recovery context failure preserves durable evidence without provider work", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); const seed = worker(store, contexts[0], result("UNKNOWN")); const created = await create(seed, contexts[0]); const claim = await store.claim(created.attemptId, "old", NOW, 1000); assert.ok(claim); const obs = observation(contexts[0], "UNKNOWN"); const provider = interpretOpenSeaExactOrderObservation({ context: contexts[0], observation: obs }); const durable = { ...claim.record, lifecycle: "RESPONSE_OBSERVED" as const, providerObservedAt: obs.observedAt, httpStatus: obs.httpStatus, transportOutcome: obs.transportOutcome, responseBodySha256: obs.responseBodySha256, rawResponseArtifactHash: obs.rawResponseArtifactHash, normalizedProviderStatus: provider.providerStatus, providerResultStatus: provider.status, providerResultReasonCodes: provider.reasonCodes, normalizedOrder: provider.normalizedOrder, reasonCodes: provider.reasonCodes, retry: provider.retry }; (store as unknown as { rows: Map<string, OperationalAttemptRecord> }).rows.set(created.attemptId, durable); await store.reclaimExpired("2026-01-01T00:00:02.000Z"); let credentials = 0, executions = 0; const restarted = createTargetedVerifierOperationalWorker({ store, snapshotReader: { readSnapshot: async () => { throw new Error("READER_MUST_NOT_RUN"); } }, workerId: "context-failure", now: () => "2026-01-01T00:00:02.000Z", credentialProvider: async () => { credentials++; return "x"; }, execute: async () => { executions++; return obs; }, contextResolver: async () => { throw new Error("CONTEXT_FAILURE"); } }); const run = await restarted.runOnce(created.attemptId); assert.equal(run.outcome, "FAILED"); assert.equal(credentials, 0); assert.equal(executions, 0); const preserved = await store.get(created.attemptId); assert.equal(preserved?.lifecycle, "RESPONSE_OBSERVED"); assert.equal(preserved?.providerResultStatus, provider.status); } finally { await disposeTrustedContexts(root); } });
+test("recovery context failure preserves durable evidence without provider work", async () => {
+  const { root, contexts } = await setup();
+  try {
+    const store = new InMemoryTargetedVerifierAttemptStore();
+    const seed = worker(store, contexts[0], result("UNKNOWN"));
+    const created = await create(seed, contexts[0]);
+    const claim = await store.claim(created.attemptId, "old", NOW, 1000);
+    assert.ok(claim);
+    const obs = observation(contexts[0], "UNKNOWN");
+    const provider = interpretOpenSeaExactOrderObservation({ context: contexts[0], observation: obs });
+    const durable = { ...claim.record, lifecycle: "RESPONSE_OBSERVED" as const, providerObservedAt: obs.observedAt, httpStatus: obs.httpStatus, transportOutcome: obs.transportOutcome, responseBodySha256: obs.responseBodySha256, rawResponseArtifactHash: obs.rawResponseArtifactHash, normalizedProviderStatus: provider.providerStatus, providerResultStatus: provider.status, providerReasonCodes: provider.reasonCodes, providerResultReasonCodes: provider.reasonCodes, normalizedOrder: provider.normalizedOrder, reasonCodes: provider.reasonCodes, retry: provider.retry };
+    assert.equal(await store.saveResponse(created.attemptId, claim.leaseToken, durable, NOW), true);
+    await store.reclaimExpired("2026-01-01T00:00:02.000Z");
+    const before = await store.get(created.attemptId);
+    assert.ok(before);
+    let permits = 0, credentials = 0, executions = 0, snapshotReads = 0;
+    const acquirePermit = store.acquirePermit.bind(store);
+    store.acquirePermit = async (...args) => { permits++; return acquirePermit(...args); };
+    const restarted = createTargetedVerifierOperationalWorker({
+      store,
+      snapshotReader: { readSnapshot: async () => { snapshotReads++; throw new Error("READER_MUST_NOT_RUN"); } },
+      workerId: "context-failure",
+      now: () => "2026-01-01T00:00:02.000Z",
+      credentialProvider: async () => { credentials++; return "x"; },
+      execute: async () => { executions++; return obs; },
+      contextResolver: async () => { throw new Error("CONTEXT_FAILURE"); }
+    });
+    const countersBefore = { permits, credentials, executions, snapshotReads };
+    const run = await restarted.runOnce(created.attemptId);
+    assert.equal(run.outcome, "FAILED");
+    assert.deepEqual(
+      { permits: permits - countersBefore.permits, credentials: credentials - countersBefore.credentials, executions: executions - countersBefore.executions, snapshotReads: snapshotReads - countersBefore.snapshotReads },
+      { permits: 0, credentials: 0, executions: 0, snapshotReads: 0 }
+    );
+    const preserved = await store.get(created.attemptId);
+    assert.ok(preserved);
+    assert.equal(preserved.lifecycle, "RESPONSE_OBSERVED");
+    assert.deepEqual(providerEvidence(preserved), providerEvidence(before));
+    assert.equal(preserved.finalResultStatus, null);
+    assert.equal(preserved.semanticEvidenceHash, null);
+    assert.equal(preserved.postVerificationWatermark, null);
+    assert.equal(preserved.postRelevantFingerprint, null);
+    for (const reason of journalInvalidationReasons) assert.equal(preserved.reasonCodes.includes(reason), false);
+  } finally { await disposeTrustedContexts(root); }
+});
+
+test("resolver preVerification mismatch fails before reader and preserves durable evidence", async () => {
+  const { root, contexts } = await setup();
+  try {
+    const store = new InMemoryTargetedVerifierAttemptStore();
+    const seed = worker(store, contexts[0], result("UNKNOWN"));
+    const created = await create(seed, contexts[0]);
+    const claim = await store.claim(created.attemptId, "old", NOW, 1000);
+    assert.ok(claim);
+    const obs = observation(contexts[0], "UNKNOWN");
+    const provider = interpretOpenSeaExactOrderObservation({ context: contexts[0], observation: obs });
+    const durable = { ...claim.record, lifecycle: "PENDING_FENCE" as const, providerObservedAt: obs.observedAt, httpStatus: obs.httpStatus, transportOutcome: obs.transportOutcome, responseBodySha256: obs.responseBodySha256, rawResponseArtifactHash: obs.rawResponseArtifactHash, normalizedProviderStatus: provider.providerStatus, providerResultStatus: provider.status, providerReasonCodes: provider.reasonCodes, providerResultReasonCodes: provider.reasonCodes, normalizedOrder: provider.normalizedOrder, reasonCodes: provider.reasonCodes, retry: provider.retry };
+    assert.equal(await store.saveResponse(created.attemptId, claim.leaseToken, durable, NOW), true);
+    await store.reclaimExpired("2026-01-01T00:00:02.000Z");
+    const before = await store.get(created.attemptId);
+    assert.ok(before);
+    const wrongContext = cloneTargetedVerifierContext(deepFreeze({
+      ...structuredClone(contexts[0]),
+      preVerification: {
+        ...structuredClone(contexts[0].preVerification),
+        watermark: { ...contexts[0].preVerification.watermark, eventId: "99" }
+      }
+    }));
+    let permits = 0, credentials = 0, executions = 0, snapshotReads = 0;
+    const acquirePermit = store.acquirePermit.bind(store);
+    store.acquirePermit = async (...args) => { permits++; return acquirePermit(...args); };
+    const restarted = createTargetedVerifierOperationalWorker({
+      store,
+      snapshotReader: { readSnapshot: async () => { snapshotReads++; return contexts[0].preVerification; } },
+      workerId: "wrong-pre",
+      now: () => "2026-01-01T00:00:02.000Z",
+      credentialProvider: async () => { credentials++; return "x"; },
+      execute: async () => { executions++; return obs; },
+      contextResolver: async () => wrongContext
+    });
+    const run = await restarted.runOnce(created.attemptId);
+    assert.equal(run.outcome, "FAILED");
+    assert.deepEqual({ permits, credentials, executions, snapshotReads }, { permits: 0, credentials: 0, executions: 0, snapshotReads: 0 });
+    const preserved = await store.get(created.attemptId);
+    assert.ok(preserved);
+    assert.equal(preserved.lifecycle, "PENDING_FENCE");
+    assert.deepEqual(providerEvidence(preserved), providerEvidence(before));
+    assert.equal(preserved.finalResultStatus, null);
+    assert.equal(preserved.semanticEvidenceHash, null);
+    assert.equal(preserved.postVerificationWatermark, null);
+    assert.equal(preserved.postRelevantFingerprint, null);
+    for (const reason of journalInvalidationReasons) assert.equal(preserved.reasonCodes.includes(reason), false);
+  } finally { await disposeTrustedContexts(root); }
+});
 
 test("transient transport retry uses the transient policy delay exactly", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); const w = worker(store, contexts[0], result("TRANSPORT_FAILED", retryTransient), { policy: { maxAttempts: 2, transientTransportDelayMs: 7000 } }); const created = await create(w, contexts[0]); const run = await w.runOnce(created.attemptId); assert.equal(run.outcome, "RETRY_SCHEDULED"); const child = await store.get(run.attemptId!); assert.ok(child); assert.equal(child.nextAttemptAt, "2026-01-01T00:00:07.000Z"); } finally { await disposeTrustedContexts(root); } });
 
-test("maxAttempts=2 exhausts child one without creating child two", async () => { const { root, contexts } = await setup(); try { const store = new InMemoryTargetedVerifierAttemptStore(); let now = NOW; let nowMs = 0; const w = __createTargetedVerifierOperationalWorkerForTest({ store, workerId: "bounded", now: () => now, nowMs: () => nowMs, credentialProvider: async () => "key", execute: async () => observation(contexts[0], "TRANSPORT_FAILED"), postFence: async () => fence(), contextResolver: async () => contexts[0], policy: { maxAttempts: 2, transientTransportDelayMs: 5000 } }); const source = await create(w, contexts[0]); const first = await w.runOnce(source.attemptId); assert.equal(first.outcome, "RETRY_SCHEDULED"); const child = await store.get(first.attemptId!); assert.ok(child); assert.equal(child.attemptNumber, 1); now = "2026-01-01T00:00:05.000Z"; nowMs = 5000; const exhaustedRun = await w.runOnce(child.attemptId); assert.equal(exhaustedRun.outcome, "COMPLETE"); const exhausted = await store.get(child.attemptId); assert.ok(exhausted); assert.equal(exhausted.attemptNumber, 1); assert.equal(exhausted.failureClassification, "RETRY_EXHAUSTED"); assert.equal(exhausted.providerResultStatus, "TRANSPORT_FAILED"); assert.equal(exhausted.finalResultStatus, "TRANSPORT_FAILED"); assert.equal(exhausted.semanticEvidenceHash, operationalSemanticEvidenceHash(exhausted)); assert.equal(await store.get(attemptIdentity(contexts[0], 2)), null); } finally { await disposeTrustedContexts(root); } });
+test("maxAttempts=2 exhausts child one without creating child two", async () => {
+  const { root, contexts } = await setup();
+  try {
+    const store = new InMemoryTargetedVerifierAttemptStore();
+    let now = NOW;
+    let nowMs = 0;
+    let credentials = 0;
+    let executions = 0;
+    let snapshots = 0;
+    const w = __createTargetedVerifierOperationalWorkerForTest({
+      store,
+      workerId: "bounded",
+      now: () => now,
+      nowMs: () => nowMs,
+      credentialProvider: async () => { credentials++; return "key"; },
+      execute: async ({ context }) => { executions++; return observation(context, "TRANSPORT_FAILED"); },
+      postFence: async () => { snapshots++; return fence(); },
+      contextResolver: async () => contexts[0],
+      policy: { maxAttempts: 2, transientTransportDelayMs: 5000 }
+    });
+    const source = await create(w, contexts[0]);
+    const first = await w.runOnce(source.attemptId);
+    assert.equal(first.outcome, "RETRY_SCHEDULED");
+    const child = await store.get(first.attemptId!);
+    assert.ok(child);
+    assert.equal(child.attemptNumber, 1);
+    assert.equal(child.lifecycle, "NOT_STARTED");
+    assert.equal(child.nextAttemptAt, "2026-01-01T00:00:05.000Z");
+    assert.equal(child.preVerificationWatermark.eventId, "100");
+    now = "2026-01-01T00:00:05.000Z";
+    nowMs = 5000;
+    const exhaustedRun = await w.runOnce(child.attemptId);
+    assert.equal(exhaustedRun.outcome, "COMPLETE");
+    const exhausted = await store.get(child.attemptId);
+    assert.ok(exhausted);
+    assert.equal(exhausted.attemptNumber, 1);
+    assert.equal(exhausted.lifecycle, "COMPLETE");
+    assert.equal(exhausted.failureClassification, "RETRY_EXHAUSTED");
+    assert.equal(exhausted.providerResultStatus, "TRANSPORT_FAILED");
+    assert.equal(exhausted.finalResultStatus, "TRANSPORT_FAILED");
+    assert.equal(exhausted.semanticEvidenceHash, operationalSemanticEvidenceHash(exhausted));
+    assert.equal(await store.get(attemptIdentity(contexts[0], 2)), null);
+    assert.equal(credentials, 2);
+    assert.equal(executions, 2);
+    assert.equal(snapshots, 2);
+  } finally { await disposeTrustedContexts(root); }
+});
+
+test("retry child same-process context uses the advanced durable pre snapshot", async () => {
+  const { root, contexts } = await setup();
+  try {
+    const store = new InMemoryTargetedVerifierAttemptStore();
+    let now = NOW;
+    let nowMs = 0;
+    let reads = 0;
+    const stableFingerprint = contexts[0].preVerification.relevantOrderFingerprint;
+    const parentPost = { watermark: { eventId: "200", receivedAt: "2026-01-01T00:00:01.000Z" }, relevantOrderFingerprint: stableFingerprint };
+    const childPost = { watermark: { eventId: "150", receivedAt: "2026-01-01T00:00:06.000Z" }, relevantOrderFingerprint: stableFingerprint };
+    const w = createTargetedVerifierOperationalWorker({
+      store,
+      workerId: "advanced-child-context",
+      now: () => now,
+      nowMs: () => nowMs,
+      credentialProvider: async () => "key",
+      execute: async ({ context }) => observation(context, "TRANSPORT_FAILED"),
+      snapshotReader: { readSnapshot: async () => ++reads === 1 ? parentPost : childPost },
+      policy: { maxAttempts: 3, transientTransportDelayMs: 5000 }
+    });
+    const parent = await create(w, contexts[0]);
+    assert.equal(parent.preVerificationWatermark.eventId, "100");
+    const first = await w.runOnce(parent.attemptId);
+    assert.equal(first.outcome, "RETRY_SCHEDULED");
+    const child = await store.get(first.attemptId!);
+    assert.ok(child);
+    assert.equal(child.preVerificationWatermark.eventId, "200");
+    assert.deepEqual(child.preRelevantFingerprint, parentPost.relevantOrderFingerprint);
+    now = "2026-01-01T00:00:05.000Z";
+    nowMs = 5000;
+    const second = await w.runOnce(child.attemptId);
+    assert.equal(second.outcome, "FAILED");
+    const durable = await store.get(child.attemptId);
+    assert.ok(durable);
+    assert.equal(durable.preVerificationWatermark.eventId, "200");
+    assert.equal(durable.providerResultStatus, "TRANSPORT_FAILED");
+    assert.equal(durable.finalResultStatus, "RECONCILIATION_REQUIRED");
+    assert.ok(durable.reasonCodes.includes("WATERMARK_REGRESSION"));
+    assert.equal(durable.semanticEvidenceHash, operationalSemanticEvidenceHash(durable));
+    assert.equal(reads, 2);
+  } finally { await disposeTrustedContexts(root); }
+});
+
+test("createAttempt rejects a pre snapshot that differs from its context", async () => {
+  const { root, contexts } = await setup();
+  try {
+    const store = new InMemoryTargetedVerifierAttemptStore();
+    const w = worker(store, contexts[0], result("UNKNOWN"));
+    const mismatched = { ...contexts[0].preVerification, watermark: { ...contexts[0].preVerification.watermark, eventId: "101" } };
+    await assert.rejects(
+      () => w.createAttempt({ context: contexts[0], preVerification: mismatched, createdAt: NOW }),
+      /PRE_VERIFICATION_CONTEXT_MISMATCH/
+    );
+    assert.equal(await store.get(attemptIdentity(contexts[0], 0)), null);
+  } finally { await disposeTrustedContexts(root); }
+});

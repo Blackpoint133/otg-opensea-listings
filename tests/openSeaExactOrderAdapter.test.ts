@@ -87,11 +87,11 @@ test("only original context and observation can enter trusted normalizer path", 
 });
 test("runtime normalizer has no public raw JSON trust entry point", async () => {
   const module = await import("../src/reconciliation/verifier/targetedVerifierNormalizer.js");
-  assert.deepEqual(Object.keys(module).sort(), ["interpretOpenSeaExactOrderObservation", "validateProviderResult"]);
+  assert.deepEqual(Object.keys(module).sort(), ["interpretOpenSeaExactOrderObservation", "rehydrateProviderResult", "validateProviderResult"]);
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/reconciliation/verifier/targetedVerifierNormalizer.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /interpretTargetedOrderResponse|parseJson\(|normalizeOrder\(|rawBody|RawBody|JSON\.parse/);
-  assert.equal((source.match(/RUNTIME_PROVIDER_PROOF\.add\(/g) ?? []).length, 1);
+  assert.equal((source.match(/RUNTIME_PROVIDER_PROOF\.add\(/g) ?? []).length, 2);
 });
 
 test("same order hash with different trusted token provenance cannot reuse an observation", async () => {

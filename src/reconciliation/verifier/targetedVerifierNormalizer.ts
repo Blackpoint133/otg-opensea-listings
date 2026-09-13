@@ -24,12 +24,10 @@ function base(input: ProviderEvidenceMetadata, status: ProviderResult["status"],
         throw new Error("INVALID_NORMALIZER_PROVIDER_RESULT");
     return result;
 }
-export function validateProviderResult(value: unknown): value is ProviderResult {
+function validateProviderResultShape(value: unknown): value is ProviderResult {
     if (value === null || typeof value !== "object" || Array.isArray(value))
         return false;
     const row = value as Record<string, unknown>;
-    if (!RUNTIME_PROVIDER_PROOF.has(value))
-        return false;
     if (typeof row.status !== "string" || !RESULT_STATUSES.has(row.status) || row.authorityGranted !== false || row.deactivationAuthorityGranted !== false)
         return false;
     if (!Array.isArray(row.reasonCodes) || !row.reasonCodes.every((reason) => typeof reason === "string" && RESULT_REASONS.has(reason)) || JSON.stringify(row.reasonCodes) !== JSON.stringify([...row.reasonCodes].sort()) || new Set(row.reasonCodes).size !== row.reasonCodes.length)
@@ -61,6 +59,22 @@ export function validateProviderResult(value: unknown): value is ProviderResult 
     if (["ACTIVE_CONFIRMED", "INACTIVE_CONFIRMED", "TERMINAL_CONFIRMED", "EXPIRED_CONFIRMED"].includes(String(row.status)) && (row.httpStatus !== 200 || row.responseBodySha256 === null || row.observedAt === null || row.retry.retryable !== false || row.retry.recommendedPolicyClass !== "NONE"))
         return false;
     return true;
+}
+export function validateProviderResult(value: unknown): value is ProviderResult {
+    return typeof value === "object" && value !== null && !Array.isArray(value) && RUNTIME_PROVIDER_PROOF.has(value) && validateProviderResultShape(value);
+}
+export function rehydrateProviderResult(value: unknown): ProviderResult {
+    let owned: ProviderResult;
+    try {
+        owned = cloneOwned(value) as ProviderResult;
+    } catch {
+        throw new Error("INVALID_DURABLE_PROVIDER_RESULT");
+    }
+    if (!validateProviderResultShape(owned)) throw new Error("INVALID_DURABLE_PROVIDER_RESULT");
+    RUNTIME_PROVIDER_PROOF.add(owned);
+    const result = deepFreeze(owned);
+    if (!validateProviderResult(result)) throw new Error("INVALID_DURABLE_PROVIDER_RESULT");
+    return result;
 }
 /** Normalizer handoff for the versioned pure OpenSea adapter. No JSON parsing occurs here. */
 export function interpretOpenSeaExactOrderObservation(input: {

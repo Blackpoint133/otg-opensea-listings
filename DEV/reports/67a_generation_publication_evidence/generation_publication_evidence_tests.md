@@ -12,4 +12,4 @@ Executable coverage includes:
 
 The PostgreSQL store uses raw JSON payload admission rather than trusting TypeScript annotations. Sequence allocation is transaction-backed and does not use wall-clock ordering. ActiveListingsEvidenceV1 remains unimplemented by design.
 
-Gates: build PASS; typecheck PASS; tests 1050 total, 1050 passed, 0 failed, 0 skipped, 9631.166 ms; `git diff --check` PASS.
+Gates: build PASS; typecheck PASS; tests 1051 total, 1051 passed, 0 failed, 0 skipped, 8687.584 ms; `git diff --check` PASS.

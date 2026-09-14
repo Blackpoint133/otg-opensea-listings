@@ -1,0 +1,69 @@
+import { CANONICALIZATION_VERSION } from "./evidence/evidenceTypes.js";
+import { canonicalEvidence, deepFreeze, sha256Canonical } from "./evidence/canonicalEvidence.js";
+import { isTrustedReconstructedEvidence, type IntegratedEvidenceResult } from "./evidence/reconciliationEvidenceIntegration.js";
+import { ADDRESS_PATTERN, ORDER_HASH_PATTERN, SUPPORTED_CHAIN, SUPPORTED_CONTRACT_ADDRESS, SUPPORTED_COLLECTION_SLUG, TOKEN_ID_PATTERN, validateCanonicalIdentity, type CanonicalLocalIdentity } from "./identityScope.js";
+import { validateGenerationPublicationEvidence, type GenerationPublicationEvidenceV1, type GenerationPublicationScope, type CurrentGenerationResult } from "./generationPublication.js";
+
+export const ACTIVE_LISTINGS_EVIDENCE_SCHEMA_VERSION = "active-listings-order-evidence-v1" as const;
+export const ACTIVE_EVIDENCE_ID_SCHEMA = "shadow-active-evidence-v1" as const;
+export type ActiveListingsPresence = "PRESENT" | "ABSENT";
+export interface ActiveListingsEvidenceV1 {
+  readonly schemaVersion: typeof ACTIVE_LISTINGS_EVIDENCE_SCHEMA_VERSION;
+  readonly publicationId: string;
+  readonly publicationSequence: number;
+  readonly sourceArtifactHash: string;
+  readonly observationWatermark: Readonly<{ readonly eventId: string; readonly receivedAt: string }>;
+  readonly orderHash: string;
+  readonly chain: typeof SUPPORTED_CHAIN;
+  readonly contractAddress: typeof SUPPORTED_CONTRACT_ADDRESS;
+  readonly tokenId: string;
+  readonly presence: ActiveListingsPresence;
+  readonly status: "ACTIVE" | null;
+  readonly sourceScope: Readonly<{ readonly chain: typeof SUPPORTED_CHAIN; readonly collectionSlug: typeof SUPPORTED_COLLECTION_SLUG; readonly contractAddress: typeof SUPPORTED_CONTRACT_ADDRESS; readonly protocolAddress: string }>;
+  readonly canonicalEvidenceVersion: typeof CANONICALIZATION_VERSION;
+  readonly activeEvidenceId: string;
+}
+export interface ActiveEvidenceDerivationInput { readonly generationPublication: unknown; readonly integratedEvidence: unknown; readonly expectedIdentity: unknown; }
+export type ActiveEvidenceReasonCode = "INVALID_ORDER_IDENTITY" | "ACTIVE_EVIDENCE_PUBLICATION_MISMATCH" | "ACTIVE_EVIDENCE_ORDER_NOT_FOUND" | "ACTIVE_EVIDENCE_IDENTITY_AMBIGUOUS" | "ACTIVE_EVIDENCE_IDENTITY_MISMATCH" | "ACTIVE_EVIDENCE_BLOCKED" | "ACTIVE_EVIDENCE_WATERMARK_UNPROVEN" | "ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE";
+export type ActiveEvidenceDerivationResult = { readonly outcome: "VALID"; readonly evidence: ActiveListingsEvidenceV1; readonly reasonCodes: readonly [] } | { readonly outcome: "UNPROVEN"; readonly evidence: null; readonly reasonCodes: readonly ActiveEvidenceReasonCode[] };
+const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+const hash = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+const iso = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
+const eventId = (value: unknown): value is string => typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value);
+const watermarkValid = (value: unknown): value is Readonly<{ readonly eventId: string; readonly receivedAt: string }> => record(value) && Object.keys(value).length === 2 && eventId(value.eventId) && iso(value.receivedAt);
+const sourceScopeValid = (value: unknown): value is ActiveListingsEvidenceV1["sourceScope"] => record(value) && Object.keys(value).length === 4 && value.chain === SUPPORTED_CHAIN && value.collectionSlug === SUPPORTED_COLLECTION_SLUG && value.contractAddress === SUPPORTED_CONTRACT_ADDRESS && typeof value.protocolAddress === "string" && ADDRESS_PATTERN.test(value.protocolAddress);
+const uniqueReasons = (reasons: readonly ActiveEvidenceReasonCode[]): ActiveEvidenceReasonCode[] => [...new Set(reasons)].sort();
+export function activeEvidenceMaterial(value: Pick<ActiveListingsEvidenceV1, "schemaVersion"|"publicationId"|"publicationSequence"|"sourceArtifactHash"|"observationWatermark"|"orderHash"|"chain"|"contractAddress"|"tokenId"|"presence"|"status"|"sourceScope"|"canonicalEvidenceVersion">) { return { schema: ACTIVE_EVIDENCE_ID_SCHEMA, schemaVersion: value.schemaVersion, publicationId: value.publicationId, publicationSequence: value.publicationSequence, sourceArtifactHash: value.sourceArtifactHash, observationWatermark: value.observationWatermark, orderHash: value.orderHash, chain: value.chain, contractAddress: value.contractAddress, tokenId: value.tokenId, presence: value.presence, status: value.status, sourceScope: value.sourceScope, canonicalEvidenceVersion: value.canonicalEvidenceVersion }; }
+export function validateActiveListingsEvidence(value: unknown): value is ActiveListingsEvidenceV1 {
+  const keys = ["schemaVersion","publicationId","publicationSequence","sourceArtifactHash","observationWatermark","orderHash","chain","contractAddress","tokenId","presence","status","sourceScope","canonicalEvidenceVersion","activeEvidenceId"];
+  if (!record(value) || Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key)) || keys.some((key) => !Object.prototype.hasOwnProperty.call(value, key))) return false;
+  if (value.schemaVersion !== ACTIVE_LISTINGS_EVIDENCE_SCHEMA_VERSION || !hash(value.publicationId) || !Number.isSafeInteger(value.publicationSequence) || (value.publicationSequence as number) < 0 || !hash(value.sourceArtifactHash) || !watermarkValid(value.observationWatermark) || !ORDER_HASH_PATTERN.test(String(value.orderHash)) || value.chain !== SUPPORTED_CHAIN || value.contractAddress !== SUPPORTED_CONTRACT_ADDRESS || typeof value.tokenId !== "string" || !TOKEN_ID_PATTERN.test(value.tokenId) || (value.presence !== "PRESENT" && value.presence !== "ABSENT") || (value.presence === "PRESENT" ? value.status !== "ACTIVE" : value.status !== null) || !sourceScopeValid(value.sourceScope) || value.sourceScope.chain !== value.chain || value.sourceScope.contractAddress !== value.contractAddress || value.canonicalEvidenceVersion !== CANONICALIZATION_VERSION || !hash(value.activeEvidenceId)) return false;
+  return value.activeEvidenceId === sha256Canonical(activeEvidenceMaterial(value as unknown as ActiveListingsEvidenceV1));
+}
+function invalid(reason: ActiveEvidenceReasonCode): ActiveEvidenceDerivationResult { return { outcome: "UNPROVEN", evidence: null, reasonCodes: [reason] }; }
+function publicationMismatch(publication: GenerationPublicationEvidenceV1, evidence: IntegratedEvidenceResult): boolean {
+  const manifest = evidence.manifest; const candidate = evidence.candidateRef; const barrier = evidence.barrierRef; const source = publication.sourceArtifactIdentity;
+  return !manifest || !candidate || !barrier || publication.publicationState !== "ACCEPTED" || manifest.sweepId !== publication.sweepId || manifest.rootContentHash !== publication.generationRootHash || candidate.contentHash !== publication.candidateArtifactHash || barrier.contentHash !== publication.barrierArtifactHash || source.manifestRootContentHash !== manifest.rootContentHash || source.candidateArtifactHash !== candidate.contentHash || source.barrierArtifactHash !== barrier.contentHash || canonicalEvidence(source.sourceProvenance) !== canonicalEvidence(manifest.sourceProvenance) || manifest.scope.chain !== publication.scope.chain || manifest.scope.collection !== publication.scope.collectionSlug || manifest.scope.contract !== publication.scope.contractAddress;
+}
+function derive(input: ActiveEvidenceDerivationInput): ActiveEvidenceDerivationResult {
+  if (validateCanonicalIdentity(input.expectedIdentity) !== "VALID") return invalid("INVALID_ORDER_IDENTITY");
+  const expected = input.expectedIdentity as CanonicalLocalIdentity;
+  if (!validateGenerationPublicationEvidence(input.generationPublication) || !isTrustedReconstructedEvidence(input.integratedEvidence) || input.integratedEvidence.status !== "VALID") return invalid("ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE");
+  const publication = input.generationPublication as GenerationPublicationEvidenceV1; const integrated = input.integratedEvidence;
+  if (publicationMismatch(publication, integrated) || expected.chain !== publication.scope.chain || expected.contractAddress !== publication.scope.contractAddress || expected.collectionSlug !== publication.scope.collectionSlug || expected.protocolAddress !== publication.scope.protocolAddress) return invalid("ACTIVE_EVIDENCE_PUBLICATION_MISMATCH");
+  const payload = integrated.candidate?.payload; if (!record(payload) || !Array.isArray(payload.orders)) return invalid("ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE");
+  const matches = payload.orders.filter((item) => record(item) && item.orderHash === expected.orderHash); if (matches.length === 0) return invalid("ACTIVE_EVIDENCE_ORDER_NOT_FOUND"); if (matches.length > 1) return invalid("ACTIVE_EVIDENCE_IDENTITY_AMBIGUOUS");
+  const order = matches[0]; if (!record(order) || !record(order.identity)) return invalid("ACTIVE_EVIDENCE_IDENTITY_MISMATCH"); const identity = order.identity;
+  if (identity.orderHash !== expected.orderHash || identity.chain !== expected.chain || identity.contractAddress !== expected.contractAddress || identity.tokenId !== expected.tokenId || identity.collectionSlug !== expected.collectionSlug || identity.protocolAddress !== expected.protocolAddress) return invalid("ACTIVE_EVIDENCE_IDENTITY_MISMATCH");
+  const classification = order.classification; const reasons = order.reasons; const seen = order.seenInSweep; if (classification === "BLOCKED") return invalid("ACTIVE_EVIDENCE_BLOCKED"); if ((classification !== "PRESENT" && classification !== "ABSENT_CANDIDATE") || !Array.isArray(reasons) || reasons.length !== 0 || order.authorityGranted !== false || (classification === "PRESENT" && seen !== true) || (classification === "ABSENT_CANDIDATE" && seen !== false)) return invalid("ACTIVE_EVIDENCE_IDENTITY_MISMATCH");
+  const barrierPayload = integrated.barrier?.payload; if (!record(barrierPayload) || barrierPayload.state !== "VERIFIED" || !record(barrierPayload.catchUp) || barrierPayload.catchUp.outcome !== "STABLE" || barrierPayload.catchUp.stable !== true || !watermarkValid(barrierPayload.catchUp.stableWatermark)) return invalid("ACTIVE_EVIDENCE_WATERMARK_UNPROVEN");
+  const presence = classification === "PRESENT" ? "PRESENT" : "ABSENT"; const status = presence === "PRESENT" ? "ACTIVE" : null; const observationWatermark = barrierPayload.catchUp.stableWatermark; const base = { schemaVersion: ACTIVE_LISTINGS_EVIDENCE_SCHEMA_VERSION, publicationId: publication.generationPublicationId, publicationSequence: publication.publicationSequence, sourceArtifactHash: publication.candidateArtifactHash, observationWatermark, orderHash: expected.orderHash, chain: SUPPORTED_CHAIN, contractAddress: SUPPORTED_CONTRACT_ADDRESS, tokenId: expected.tokenId, presence, status, sourceScope: publication.scope, canonicalEvidenceVersion: CANONICALIZATION_VERSION } as const; const evidence = deepFreeze({ ...base, activeEvidenceId: sha256Canonical(activeEvidenceMaterial(base)) }); return { outcome: "VALID", evidence, reasonCodes: [] as const };
+}
+export function deriveActiveListingsEvidence(input: ActiveEvidenceDerivationInput): ActiveEvidenceDerivationResult { try { return derive(input); } catch { return invalid("ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE"); } }
+
+export interface IntegratedGenerationEvidenceResolver { resolve(publication: GenerationPublicationEvidenceV1): Promise<IntegratedEvidenceResult | null>; }
+export type CurrentActiveListingsEvidenceResult = { readonly outcome: "CURRENT_ACTIVE_EVIDENCE"; readonly evidence: ActiveListingsEvidenceV1 } | { readonly outcome: "ACTIVE_EVIDENCE_UNPROVEN" | "CURRENT_GENERATION_UNPROVEN" | "CURRENT_GENERATION_CONFLICT" | "ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE"; readonly evidence: null; readonly reasonCodes: readonly string[] };
+export class CurrentActiveListingsEvidenceSource {
+  constructor(private readonly generationStore: { getCurrentAcceptedGeneration(scope: GenerationPublicationScope): Promise<CurrentGenerationResult> }, private readonly resolver: IntegratedGenerationEvidenceResolver) {}
+  async resolve(expectedIdentity: unknown): Promise<CurrentActiveListingsEvidenceResult> { if (validateCanonicalIdentity(expectedIdentity) !== "VALID") return { outcome: "ACTIVE_EVIDENCE_UNPROVEN", evidence: null, reasonCodes: ["INVALID_ORDER_IDENTITY"] }; const identity = expectedIdentity as CanonicalLocalIdentity; const scope: GenerationPublicationScope = { chain: SUPPORTED_CHAIN, collectionSlug: SUPPORTED_COLLECTION_SLUG, contractAddress: SUPPORTED_CONTRACT_ADDRESS, protocolAddress: identity.protocolAddress }; let current: CurrentGenerationResult; try { current = await this.generationStore.getCurrentAcceptedGeneration(scope); } catch { return { outcome: "ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE", evidence: null, reasonCodes: ["ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE"] }; } if (current.outcome !== "CURRENT") return { outcome: current.outcome, evidence: null, reasonCodes: [current.outcome] }; let integrated: IntegratedEvidenceResult | null; try { integrated = await this.resolver.resolve(current.publication); } catch { integrated = null; } if (!integrated) return { outcome: "ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE", evidence: null, reasonCodes: ["ACTIVE_EVIDENCE_SOURCE_UNAVAILABLE"] }; const result = deriveActiveListingsEvidence({ generationPublication: current.publication, integratedEvidence: integrated, expectedIdentity }); if (result.outcome !== "VALID") return { outcome: "ACTIVE_EVIDENCE_UNPROVEN", evidence: null, reasonCodes: result.reasonCodes }; if (result.evidence.publicationId !== current.publication.generationPublicationId) return { outcome: "ACTIVE_EVIDENCE_UNPROVEN", evidence: null, reasonCodes: ["ACTIVE_EVIDENCE_PUBLICATION_MISMATCH"] }; return { outcome: "CURRENT_ACTIVE_EVIDENCE", evidence: result.evidence }; }
+}

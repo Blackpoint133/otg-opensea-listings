@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import type { DbPool, QueryResult, TransactionClient } from "../src/db/types.js";
 import { canonicalEvidence, sha256Canonical } from "../src/reconciliation/evidence/canonicalEvidence.js";
 import { GENERATION_PUBLICATION_SCHEMA_VERSION, generationCommitmentMaterial, generationPublicationMaterial, PostgresGenerationPublicationStore, validateGenerationPublicationEvidence, type GenerationPublicationEvidenceV1, type GenerationPublicationScope } from "../src/reconciliation/generationPublication.js";
@@ -61,4 +62,13 @@ test("empty and corrupted publication rows fail closed", async () => {
 test("untrusted caller cannot create a publication", async () => {
   const store = new PostgresGenerationPublicationStore(new PublicationDb()); const source = { integratedEvidence: { status: "VALID", manifest: null, candidate: null, barrier: null, candidateRef: null, barrierRef: null, reasons: [], authorityGranted: false, deactivationAuthorityGranted: false } as never, protocolAddress: scope.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" };
   await assert.rejects(store.publish(source), /INVALID_ACCEPTED_GENERATION_EVIDENCE/);
+});
+test("migration and allocator contract are transactional and monotonic", () => {
+  const sql = fs.readFileSync(new URL("../sql/007_create_generation_publications.sql", import.meta.url), "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.targeted_verifier_generation_publication_sequence/);
+  assert.match(sql, /publication_sequence bigint NOT NULL CHECK \(publication_sequence >= 0\)/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.targeted_verifier_generation_publications/);
+  assert.match(sql, /UNIQUE \(generation_commitment_id, source_evidence_hash, publication_state\)/);
+  const db = new PublicationDb(); const store = new PostgresGenerationPublicationStore(db);
+  assert.equal(typeof store.getCurrentAcceptedGeneration, "function");
 });

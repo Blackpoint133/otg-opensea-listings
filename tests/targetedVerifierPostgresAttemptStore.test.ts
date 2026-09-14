@@ -406,3 +406,51 @@ for (const [name, record] of malformedStates) {
     await assert.rejects(() => postgres.get(record.attemptId), /INVALID_OPERATIONAL_RECORD/);
   });
 }
+
+test("terminal classification binding rejects tampering outside semantic hash", async () => {
+  const valid = validReconciliationRequiredRecord("classification-binding");
+  const tampered = { ...valid, failureClassification: "RETRY_SCHEDULED" as const };
+  assert.equal(operationalSemanticEvidenceHash(tampered), valid.semanticEvidenceHash);
+  assert.throws(() => new InMemoryTargetedVerifierAttemptStore({ records: [tampered] }), /INVALID_OPERATIONAL_RECORD/);
+  const db = new AttemptDb(), postgres = new PostgresTargetedVerifierAttemptStore(db);
+  db.rows.set(tampered.attemptId, { payload: clone(tampered), lifecycle: tampered.lifecycle, claimedAt: tampered.claimedAt, leaseExpiresAt: tampered.leaseExpiresAt, leaseToken: tampered.leaseToken, nextAttemptAt: tampered.nextAttemptAt, failureClassification: tampered.failureClassification });
+  await assert.rejects(() => postgres.get(tampered.attemptId), /INVALID_OPERATIONAL_RECORD/);
+});
+
+const terminalMismatches: readonly [string, OperationalAttemptRecord][] = [
+  ["retry scheduled non-retryable", { ...validRetryScheduledRecord("terminal-retry-flag"), retry: { ...validRetryScheduledRecord("terminal-retry-flag").retry, retryable: false } }],
+  ["retry scheduled final mismatch", { ...validRetryScheduledRecord("terminal-retry-final"), finalResultStatus: "STALE" }],
+  ["stale final mismatch", { ...validStaleRecord("terminal-stale-final"), finalResultStatus: "INACTIVE_CONFIRMED" }],
+  ["reconciliation final mismatch", { ...validReconciliationRequiredRecord("terminal-recon-final"), finalResultStatus: "STALE" }],
+  ["exhausted non-retryable", { ...validCompleteRecord("terminal-exhausted-flag", true), retry: { ...validCompleteRecord("terminal-exhausted-flag", true).retry, retryable: false } }],
+  ["complete null classification retryable", { ...validCompleteRecord("terminal-complete-flag"), failureClassification: null, retry: { ...validCompleteRecord("terminal-complete-flag").retry, retryable: true } }]
+];
+for (const [name, record] of terminalMismatches) {
+  test("terminal state rejects " + name + " in memory and raw PostgreSQL", async () => {
+    assert.throws(() => new InMemoryTargetedVerifierAttemptStore({ records: [record] }), /INVALID_OPERATIONAL_RECORD/);
+    const db = new AttemptDb(), postgres = new PostgresTargetedVerifierAttemptStore(db);
+    db.rows.set(record.attemptId, { payload: clone(record), lifecycle: record.lifecycle, claimedAt: record.claimedAt, leaseExpiresAt: record.leaseExpiresAt, leaseToken: record.leaseToken, nextAttemptAt: record.nextAttemptAt, failureClassification: record.failureClassification });
+    await assert.rejects(() => postgres.get(record.attemptId), /INVALID_OPERATIONAL_RECORD/);
+  });
+}
+
+test("durable admission rejects self-consistent foreign order scopes", async () => {
+  const base = validCompleteRecord("foreign-scope-base");
+  for (const kind of ["chain", "collection", "contract"] as const) {
+    const expected = { ...base.expectedIdentity };
+    const request = { ...base.requestIdentity };
+    const order = base.normalizedOrder ? { ...base.normalizedOrder } : null;
+    if (kind === "chain") { expected.chain = "ethereum"; request.chain = "ethereum"; if (order) order.chain = "ethereum"; }
+    if (kind === "collection") expected.collectionSlug = "foreign-collection";
+    if (kind === "contract") { expected.contractAddress = "0x" + "8".repeat(40); if (order) order.contractAddress = expected.contractAddress; }
+    const foreign = { ...base, expectedIdentity: expected, requestIdentity: request, normalizedOrder: order,
+      attemptId: "", idempotencyKey: "" };
+    foreign.attemptId = sha256Canonical(canonicalAttemptMaterial(foreign));
+    foreign.idempotencyKey = sha256Canonical({ sweepId: foreign.sweepId, generationRootHash: foreign.generationRootHash, orderHash: foreign.orderHash, candidateArtifactHash: foreign.candidateArtifactHash, barrierArtifactHash: foreign.barrierArtifactHash, providerContractVersion: foreign.providerContractVersion, attemptNumber: foreign.attemptNumber });
+    foreign.semanticEvidenceHash = operationalSemanticEvidenceHash(foreign);
+    assert.throws(() => new InMemoryTargetedVerifierAttemptStore({ records: [foreign] }), /INVALID_OPERATIONAL_RECORD/);
+    const db = new AttemptDb(), postgres = new PostgresTargetedVerifierAttemptStore(db);
+    db.rows.set(foreign.attemptId, { payload: clone(foreign), lifecycle: foreign.lifecycle, claimedAt: foreign.claimedAt, leaseExpiresAt: foreign.leaseExpiresAt, leaseToken: foreign.leaseToken, nextAttemptAt: foreign.nextAttemptAt, failureClassification: foreign.failureClassification });
+    await assert.rejects(() => postgres.get(foreign.attemptId), /INVALID_OPERATIONAL_RECORD/);
+  }
+});

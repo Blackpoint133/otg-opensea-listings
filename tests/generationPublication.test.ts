@@ -26,6 +26,16 @@ class PublicationDb implements DbPool {
   async connect(): Promise<TransactionClient> { return { release() {}, query: (q, v) => this.query(q, v) }; }
   async query<T = unknown>(q: string, values?: readonly unknown[]): Promise<QueryResult<T>> { this.sql.push(q); const l = q.toLowerCase(); if (l.startsWith("select generation_publication_id") && l.includes("where generation_commitment_id")) return { rows: this.rows.filter((r) => r.generation_commitment_id === values?.[0] && r.source_evidence_hash === values?.[1] && r.publication_state === values?.[2]) as T[], rowCount: this.rows.length }; if (l.startsWith("select generation_publication_id")) return { rows: this.rows as T[], rowCount: this.rows.length }; if (l.startsWith("update public.targeted_verifier_generation_publication_sequence")) { this.sequence += 1; return { rows: [{ publication_sequence: this.sequence }] as T[], rowCount: 1 }; } if (l.startsWith("insert into public.targeted_verifier_generation_publications")) { const v = values ?? []; this.rows.push({ generation_publication_id: v[0], generation_commitment_id: v[1], publication_sequence: v[2], publication_state: v[3], sweep_id: v[4], generation_root_hash: v[5], candidate_artifact_hash: v[6], barrier_artifact_hash: v[7], candidate_model_version: v[8], generation_model_version: v[9], verifier_schema_version: v[10], verifier_policy_version: v[11], provider_contract_version: v[12], normalizer_version: v[13], scope: JSON.parse(String(v[14])), payload: JSON.parse(String(v[15])), source_evidence_hash: v[16], created_at: v[17] }); return { rows: [], rowCount: 1 }; } return { rows: [], rowCount: 0 }; }
 }
+class TransactionalPublicationDb implements DbPool {
+  committedRows: Row[] = []; committedSequence = 0; queryLog: string[] = []; failInsert = false; private nextId = 1; owner: number | null = null; private waiters: Array<{ id: number; resolve: () => void }> = []; private beginCount = 0; private beginTarget = 0; private beginRelease: (() => void) | null = null;
+  async end() {}
+  async waitForBegins(target: number): Promise<void> { this.beginTarget = target; if (this.beginCount >= target) return; await new Promise<void>((resolve) => { this.beginRelease = resolve; }); }
+  releaseBegins(): void { this.beginRelease?.(); this.beginRelease = null; }
+  private async lock(id: number): Promise<void> { if (this.owner === null) { this.owner = id; return; } await new Promise<void>((resolve) => this.waiters.push({ id, resolve })); }
+  private unlock(id: number): void { if (this.owner !== id) throw new Error("LOCK_OWNER_MISMATCH"); const next = this.waiters.shift(); if (next) { this.owner = next.id; next.resolve(); } else this.owner = null; }
+  async connect(): Promise<TransactionClient> { const id = this.nextId++; const local: { rows: Row[]; sequence: number | null; begun: boolean } = { rows: [], sequence: null, begun: false }; return { release() {}, query: async <T = unknown>(q: string, values?: readonly unknown[]) => { this.queryLog.push(q); const l = q.toLowerCase(); if (l === "begin") { local.begun = true; this.beginCount += 1; if (this.beginCount >= this.beginTarget) this.beginRelease?.(); return { rows: [], rowCount: 0 } as QueryResult<T>; } if (l === "commit") { if (local.sequence !== null) this.committedSequence = local.sequence; this.committedRows.push(...local.rows); if (this.owner === id) this.unlock(id); return { rows: [], rowCount: 0 } as QueryResult<T>; } if (l === "rollback") { if (this.owner === id) this.unlock(id); return { rows: [], rowCount: 0 } as QueryResult<T>; } if (l.startsWith("select generation_publication_id") && l.includes("where generation_commitment_id")) return { rows: this.committedRows.filter((r) => r.generation_commitment_id === values?.[0] && r.source_evidence_hash === values?.[1] && r.publication_state === values?.[2]) as T[], rowCount: 1 } as QueryResult<T>; if (l.startsWith("update public.targeted_verifier_generation_publication_sequence")) { await this.lock(id); local.sequence = this.committedSequence + 1; return { rows: [{ publication_sequence: local.sequence }] as T[], rowCount: 1 }; } if (l.startsWith("insert into public.targeted_verifier_generation_publications")) { if (this.failInsert) throw new Error("TEST_INSERT_FAILURE"); const v = values ?? []; local.rows.push({ generation_publication_id: v[0], generation_commitment_id: v[1], publication_sequence: v[2], publication_state: v[3], sweep_id: v[4], generation_root_hash: v[5], candidate_artifact_hash: v[6], barrier_artifact_hash: v[7], candidate_model_version: v[8], generation_model_version: v[9], verifier_schema_version: v[10], verifier_policy_version: v[11], provider_contract_version: v[12], normalizer_version: v[13], scope: JSON.parse(String(v[14])), payload: JSON.parse(String(v[15])), source_evidence_hash: v[16], created_at: v[17] }); return { rows: [], rowCount: 1 } as QueryResult<T>; } return { rows: [], rowCount: 0 } as QueryResult<T>; } }; }
+  async query<T = unknown>(q: string, values?: readonly unknown[]): Promise<QueryResult<T>> { this.queryLog.push(q); const l = q.toLowerCase(); if (l.startsWith("select generation_publication_id")) return { rows: this.committedRows as T[], rowCount: this.committedRows.length }; return { rows: [], rowCount: 0 }; }
+}
 test("GenerationPublicationEvidenceV1 exact validation and identities", () => {
   const value = publication(7);
   assert.equal(Object.isFrozen(value), false);
@@ -37,6 +47,9 @@ test("GenerationPublicationEvidenceV1 exact validation and identities", () => {
 });
 test("raw publication tampering fails closed", () => {
   const value = publication(2);
+  const impossibleProvenance = { "   ": "a".repeat(64) };
+  const impossibleSourceEvidenceHash = sha256Canonical({ manifest: value.generationRootHash, candidate: value.candidateArtifactHash, barrier: value.barrierArtifactHash, provenance: impossibleProvenance });
+  const impossiblePublication = { ...value, sourceArtifactIdentity: { ...value.sourceArtifactIdentity, sourceProvenance: impossibleProvenance }, sourceEvidenceHash: impossibleSourceEvidenceHash, generationPublicationId: sha256Canonical(generationPublicationMaterial({ ...value, sourceEvidenceHash: impossibleSourceEvidenceHash, sourceArtifactIdentity: { ...value.sourceArtifactIdentity, sourceProvenance: impossibleProvenance } })) };
   const cases: unknown[] = [
     { ...value, publicationSequence: -1 },
     { ...value, publicationSequence: Number.MAX_SAFE_INTEGER + 1 },
@@ -47,6 +60,7 @@ test("raw publication tampering fails closed", () => {
     { ...value, candidateModelVersion: "future" },
     { ...value, sourceArtifactIdentity: { ...value.sourceArtifactIdentity, sourceEvidenceHash: "x" } },
     { ...value, sourceArtifactIdentity: { ...value.sourceArtifactIdentity, sourceProvenance: { adapter: "not-a-hash" } }, sourceEvidenceHash: sha256Canonical({ manifest: value.generationRootHash, candidate: value.candidateArtifactHash, barrier: value.barrierArtifactHash, provenance: { adapter: "not-a-hash" } }) },
+    impossiblePublication,
     { ...value, extra: true }
   ];
   for (const item of cases) assert.equal(validateGenerationPublicationEvidence(item), false);
@@ -98,6 +112,39 @@ test("trusted ABORTED evidence is rejected before sequence allocation", async ()
     const db = new PublicationDb(); const store = new PostgresGenerationPublicationStore(db);
     await assert.rejects(store.publish({ integratedEvidence: fixture.evidence, protocolAddress: fixture.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" }), /GENERATION_NOT_ACCEPTED_FOR_PUBLICATION/);
     assert.equal(db.sequence, 0); assert.equal(db.rows.length, 0); assert.equal(db.sql.some((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")), false);
+  } finally { await disposeTrustedContexts(fixture.root); }
+});
+test("trusted foreign manifest scope is rejected before sequence allocation", async () => {
+  const fixture = await makeTrustedContexts({ foreignScope: true });
+  try {
+    const db = new PublicationDb(); const store = new PostgresGenerationPublicationStore(db);
+    await assert.rejects(store.publish({ integratedEvidence: fixture.evidence, protocolAddress: fixture.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" }), /UNSUPPORTED_GENERATION_SCOPE/);
+    assert.equal(db.sequence, 0); assert.equal(db.rows.length, 0); assert.equal(db.sql.some((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")), false);
+  } finally { await disposeTrustedContexts(fixture.root); }
+});
+test("transactional harness proves overlapping different publications allocate distinct committed sequences", async () => {
+  const a = await makeTrustedContexts({ protocolAddress: "0x" + "1".repeat(40) }); const b = await makeTrustedContexts({ protocolAddress: "0x" + "2".repeat(40) });
+  try {
+    const db = new TransactionalPublicationDb(); const store = new PostgresGenerationPublicationStore(db);
+    const pa = store.publish({ integratedEvidence: a.evidence, protocolAddress: a.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" });
+    const pb = store.publish({ integratedEvidence: b.evidence, protocolAddress: b.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" });
+    await db.waitForBegins(2); db.releaseBegins(); const [left, right] = await Promise.all([pa, pb]);
+    assert.notEqual(left.generationPublicationId, right.generationPublicationId); assert.notEqual(left.publicationSequence, right.publicationSequence); assert.deepEqual(db.committedRows.map((row) => row.publication_sequence).sort((x, y) => Number(x) - Number(y)), [1, 2]); assert.equal(db.owner, null);
+  } finally { await disposeTrustedContexts(a.root); await disposeTrustedContexts(b.root); }
+});
+test("transactional harness proves overlapping identical replay is idempotent with at most a sequence gap", async () => {
+  const fixture = await makeTrustedContexts();
+  try {
+    const db = new TransactionalPublicationDb(); const store = new PostgresGenerationPublicationStore(db); const source = { integratedEvidence: fixture.evidence, protocolAddress: fixture.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" };
+    const first = store.publish(source); const second = store.publish(source); await db.waitForBegins(2); db.releaseBegins(); const [a, b] = await Promise.all([first, second]);
+    assert.equal(a.generationPublicationId, b.generationPublicationId); assert.equal(a.publicationSequence, b.publicationSequence); assert.equal(db.committedRows.length, 1); assert.equal(new Set(db.committedRows.map((row) => row.publication_sequence)).size, 1); assert.equal(db.owner, null); assert.ok(db.committedSequence >= a.publicationSequence);
+  } finally { await disposeTrustedContexts(fixture.root); }
+});
+test("transactional sequence rollback leaves no publication visible", async () => {
+  const fixture = await makeTrustedContexts();
+  try {
+    const db = new TransactionalPublicationDb(); db.failInsert = true; const store = new PostgresGenerationPublicationStore(db); const source = { integratedEvidence: fixture.evidence, protocolAddress: fixture.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" };
+    await assert.rejects(store.publish(source), /TEST_INSERT_FAILURE/); assert.equal(db.committedRows.length, 0); assert.equal(db.committedSequence, 0); assert.ok(db.queryLog.some((sql) => sql.toLowerCase() === "rollback")); db.failInsert = false; const next = await store.publish(source); assert.equal(next.publicationSequence, 1); assert.equal(db.committedRows.length, 1);
   } finally { await disposeTrustedContexts(fixture.root); }
 });
 test("migration and allocator contract are transactional and monotonic", () => {

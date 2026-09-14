@@ -14,6 +14,7 @@ export const PRODUCTION_DATABASE = "server_otg";
 export const PRODUCTION_EVENT_TYPES = eventTypesForProfile("all");
 export const DEFAULT_PRODUCTION_INGRESS_CAPACITY = 256;
 export const DEFAULT_PRODUCTION_WORKER_POLL_MS = 1_000;
+export const DEFAULT_PRODUCTION_DISCONNECT_TIMEOUT_MS = 5_000;
 const REQUIRED_TABLES = [
   "opensea_listings_events_v2",
   "opensea_listings_v2",
@@ -45,7 +46,16 @@ export interface ProductionIngestionCounters {
   ingressQueueDepth: number;
   ingressQueueHighWater: number;
   ingressOverloadFatal: number;
+  streamErrors: number;
   lastStreamEventAt: string | null;
+}
+
+export type ProductionTerminationReason = "OPERATOR_STOP" | "EXTERNAL_ABORT" | "INGRESS_OVERLOAD" | "INGRESS_PERSISTENCE_FAILURE" | "STREAM_ERROR" | "WORKER_ERROR";
+
+export interface ProductionTermination {
+  readonly reason: ProductionTerminationReason;
+  readonly fatal: boolean;
+  readonly counters: Readonly<ProductionIngestionCounters>;
 }
 
 export interface ProductionIngestionDependencies {
@@ -63,6 +73,7 @@ export interface ProductionIngestionOptions extends ProductionIngestionDependenc
   externalStopSignal?: AbortSignal;
   ingressCapacity?: number;
   workerPollMs?: number;
+  streamDisconnectTimeoutMs?: number;
 }
 
 export interface ProductionControllerTestHooks {
@@ -116,7 +127,7 @@ function defaultStream(apiKey: string, onError: (error: unknown) => void): Produ
 }
 
 function emptyCounters(): ProductionIngestionCounters {
-  return { streamEventsObserved: 0, inboxInsertedPending: 0, inboxDuplicateExisting: 0, ingressErrors: 0, workerApplied: 0, workerReconciliationRequired: 0, workerFailed: 0, workerRuns: 0, workerIdle: 0, ingressQueueDepth: 0, ingressQueueHighWater: 0, ingressOverloadFatal: 0, lastStreamEventAt: null };
+  return { streamEventsObserved: 0, inboxInsertedPending: 0, inboxDuplicateExisting: 0, ingressErrors: 0, workerApplied: 0, workerReconciliationRequired: 0, workerFailed: 0, workerRuns: 0, workerIdle: 0, ingressQueueDepth: 0, ingressQueueHighWater: 0, ingressOverloadFatal: 0, streamErrors: 0, lastStreamEventAt: null };
 }
 
 interface IngressItem { event: unknown; receivedAt: string; }
@@ -136,11 +147,35 @@ export class ProductionIngestionRuntime {
   private stopping = false;
   private stopped = false;
   private stopPromise: Promise<void> | null = null;
+  private termination: ProductionTermination | null = null;
+  private readonly terminationPromise: Promise<ProductionTermination>;
+  private resolveTermination!: (termination: ProductionTermination) => void;
+  private terminationReason: ProductionTerminationReason | null = null;
+  private terminationFatal = false;
   private readonly log: (message: string) => void;
 
   constructor(private readonly options: ProductionIngestionOptions) {
     this.log = options.logger ?? ((message) => console.info(message));
     if (!options.confirmProductionIngestion) throw new Error("--confirm-production-ingestion is required");
+    this.terminationPromise = new Promise<ProductionTermination>((resolve) => { this.resolveTermination = resolve; });
+  }
+
+  waitForTermination(): Promise<ProductionTermination> { return this.terminationPromise; }
+
+  private failClosed(reason: Exclude<ProductionTerminationReason, "OPERATOR_STOP" | "EXTERNAL_ABORT">, error?: unknown): void {
+    if (this.terminationFatal) return;
+    this.terminationReason = reason;
+    this.terminationFatal = true;
+    this.stopping = true;
+    if (error !== undefined) this.log(`${reason.toLowerCase()}:${safeError(error)}`);
+    queueMicrotask(() => { void this.stop().catch(() => { /* cleanup remains best-effort and termination is resolved by stop */ }); });
+  }
+
+  private requestStop(reason: "OPERATOR_STOP" | "EXTERNAL_ABORT"): void {
+    if (this.terminationReason === null) this.terminationReason = reason;
+    this.stopping = true;
+    this.wakeWorker();
+    queueMicrotask(() => { void this.stop().catch(() => { /* cleanup path records terminal state */ }); });
   }
 
   async start(): Promise<void> {
@@ -152,12 +187,16 @@ export class ProductionIngestionRuntime {
       await productionDatabasePreflight(this.pool);
       this.controller = (this.options.createController ?? createProductionInboxController)(this.pool);
       await this.controller.start();
-      this.stream = (this.options.createStream ?? defaultStream)(apiKey, (error) => this.log(`stream_error:${safeError(error)}`));
+      this.stream = (this.options.createStream ?? defaultStream)(apiKey, (error) => {
+        this.counters.streamErrors += 1;
+        this.failClosed("STREAM_ERROR", error);
+      });
       this.unsubscribe = this.stream.onEvents(PRODUCTION_COLLECTION, [...PRODUCTION_EVENT_TYPES], (event) => this.acceptEvent(event));
+      if (this.terminationFatal) throw new Error("STREAM_ERROR_DURING_STARTUP");
       this.startWorkerPump();
       if (this.options.externalStopSignal) {
-        if (this.options.externalStopSignal.aborted) await this.stop();
-        else this.options.externalStopSignal.addEventListener("abort", () => { void this.stop(); }, { once: true });
+        if (this.options.externalStopSignal.aborted) this.requestStop("EXTERNAL_ABORT");
+        else this.options.externalStopSignal.addEventListener("abort", () => this.requestStop("EXTERNAL_ABORT"), { once: true });
       }
     } catch (error) {
       await this.stop();
@@ -174,8 +213,7 @@ export class ProductionIngestionRuntime {
     if (depth >= capacity) {
       this.counters.ingressOverloadFatal += 1;
       this.log("ingress_overload_fatal");
-      this.stopping = true;
-      void this.stop();
+      this.failClosed("INGRESS_OVERLOAD");
       return;
     }
     this.ingressQueue.push({ event, receivedAt: this.counters.lastStreamEventAt });
@@ -203,6 +241,7 @@ export class ProductionIngestionRuntime {
       } catch (error) {
         this.counters.ingressErrors += 1;
         this.log(`ingress_error:${safeError(error)}`);
+        this.failClosed("INGRESS_PERSISTENCE_FAILURE", error);
       } finally {
         this.ingressActive = false;
         this.counters.ingressQueueDepth = this.ingressQueue.length;
@@ -233,7 +272,7 @@ export class ProductionIngestionRuntime {
         this.counters.workerFailed += 1;
         this.log(`worker_error:${safeError(error)}`);
         this.workerPumpStopping = true;
-        queueMicrotask(() => { void this.stop(); });
+        this.failClosed("WORKER_ERROR", error);
       }
     }
   }
@@ -258,17 +297,27 @@ export class ProductionIngestionRuntime {
     if (this.stopPromise) return this.stopPromise;
     this.stopPromise = (async () => {
       if (this.stopped) return;
+      if (this.terminationReason === null) this.terminationReason = "OPERATOR_STOP";
       this.stopping = true;
       try { this.unsubscribe?.(); } catch (error) { this.log(`unsubscribe_error:${safeError(error)}`); }
       this.unsubscribe = null;
-      if (this.stream) await new Promise<void>((resolve) => { try { this.stream!.disconnect(resolve); } catch { resolve(); } });
+      if (this.stream) {
+        const timeoutMs = this.options.streamDisconnectTimeoutMs ?? DEFAULT_PRODUCTION_DISCONNECT_TIMEOUT_MS;
+        await Promise.race([
+          new Promise<void>((resolve) => { try { this.stream!.disconnect(resolve); } catch { resolve(); } }),
+          new Promise<void>((resolve) => setTimeout(() => { this.log("stream_disconnect_timeout"); resolve(); }, timeoutMs))
+        ]);
+      }
       if (this.ingressDrainPromise) await this.ingressDrainPromise;
       this.workerPumpStopping = true;
       this.wakeWorker();
       if (this.workerPumpPromise) await this.workerPumpPromise;
-      if (this.controller) await this.controller.stop();
-      if (this.pool) await closeDatabasePool(this.pool);
+      try { if (this.controller) await this.controller.stop(); } catch (error) { this.log(`controller_stop_error:${safeError(error)}`); }
+      try { if (this.pool) await closeDatabasePool(this.pool); } catch (error) { this.log(`pool_close_error:${safeError(error)}`); }
       this.stopped = true;
+      const termination: ProductionTermination = Object.freeze({ reason: this.terminationReason!, fatal: this.terminationFatal, counters: Object.freeze({ ...this.counters }) });
+      this.termination = termination;
+      this.resolveTermination(termination);
     })();
     return this.stopPromise;
   }
@@ -277,10 +326,11 @@ export class ProductionIngestionRuntime {
 export async function runProductionIngestion(options: ProductionIngestionOptions): Promise<ProductionIngestionCounters> {
   const runtime = new ProductionIngestionRuntime(options);
   await runtime.start();
-  await new Promise<void>((resolve) => {
-    const onSignal = () => { process.off("SIGINT", onSignal); process.off("SIGTERM", onSignal); void runtime.stop().finally(resolve); };
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
-  });
+  const onSignal = () => { void runtime.stop(); };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  await runtime.waitForTermination();
+  process.off("SIGINT", onSignal);
+  process.off("SIGTERM", onSignal);
   return runtime.counters;
 }

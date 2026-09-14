@@ -35,12 +35,15 @@ function controller(log: string[]) {
 
 function stream(events: unknown[], log: string[]) {
   let callback: ((event: unknown) => void) | null = null;
+  let errorCallback: ((error: unknown) => void) | null = null;
   return {
     client: {
       onEvents(collection: string, types: readonly string[], cb: (event: unknown) => void) { assert.equal(collection, "off-the-grid"); assert.deepEqual(types, [...eventTypesForProfile("all")]); callback = cb; log.push("subscribe"); return () => log.push("unsubscribe"); },
       disconnect(cb?: () => void) { log.push("disconnect"); cb?.(); }
     } as any,
-    emit(event: unknown) { callback?.(event); events.push(event); }
+    emit(event: unknown) { callback?.(event); events.push(event); },
+    error(error: unknown) { errorCallback?.(error); },
+    setErrorCallback(cb: (error: unknown) => void) { errorCallback = cb; }
   };
 }
 
@@ -100,7 +103,7 @@ test("stream events cross the durable inbox boundary and are serialized", async 
     apiKey: "test-key",
     createPool: () => pool(),
     createController: () => controller(log),
-    createStream: (_key, _error) => s.client,
+    createStream: (_key, error) => { s.setErrorCallback(error); return s.client; },
     persistEvent: async (_pool, event) => { persisted.push(event); await new Promise((resolve) => setTimeout(resolve, 2)); return { outcome: "inserted_pending", eventId: String(persisted.length), dedupeKey: "d", eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; },
     now: () => "2026-01-01T00:00:00.000Z",
     logger: () => {}
@@ -119,7 +122,7 @@ test("stream events cross the durable inbox boundary and are serialized", async 
 test("duplicate_existing is accepted idempotently", async () => {
   const s = stream([], []);
   const runtime = new ProductionIngestionRuntime({
-    confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]), createStream: () => s.client,
+    confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]), createStream: (_key, error) => { s.setErrorCallback(error); return s.client; },
     persistEvent: async () => ({ outcome: "duplicate_existing", eventId: "1", dedupeKey: "d", eventType: "item_sold", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }), logger: () => {}
   });
   await runtime.start(); (s as any).emit({ event_type: "item_sold" }); await runtime.stop();
@@ -128,7 +131,7 @@ test("duplicate_existing is accepted idempotently", async () => {
 
 test("ingress rejection is contained and does not become an unhandled rejection", async () => {
   const s = stream([], []);
-  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]), createStream: () => s.client, persistEvent: async () => { throw new Error("rejected"); }, logger: () => {} });
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]), createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, persistEvent: async () => { throw new Error("rejected"); }, logger: () => {} });
   await runtime.start(); (s as any).emit({ event_type: "item_cancelled" }); await runtime.stop();
   assert.equal(runtime.counters.ingressErrors, 1);
 });
@@ -148,7 +151,7 @@ test("worker pump drains startup backlog without Stream events", async () => {
     async runOnce() { calls += 1; return calls <= 13 ? { outcome: "processed", applyResult: { outcome: "reconciliation_required" } } : { outcome: "idle", applyResult: null }; },
     async stop() {}
   } as any;
-  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => fakeController, createStream: () => s.client, workerPollMs: 10000, logger: () => {} });
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => fakeController, createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, workerPollMs: 10000, logger: () => {} });
   await runtime.start();
   for (let i = 0; i < 100 && calls < 14; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
   await runtime.stop();
@@ -161,7 +164,7 @@ test("inserted pending wakes an idle worker without per-event runOnce coupling",
   let calls = 0;
   const fakeController = { async start() { return { state: "READY" }; }, async runOnce() { calls += 1; return { outcome: "idle", applyResult: null }; }, async stop() {} } as any;
   let persisted = false;
-  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => fakeController, createStream: () => s.client, workerPollMs: 10000, persistEvent: async () => { persisted = true; return { outcome: "inserted_pending", eventId: "1", dedupeKey: "d", eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; }, logger: () => {} });
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => fakeController, createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, workerPollMs: 10000, persistEvent: async () => { persisted = true; return { outcome: "inserted_pending", eventId: "1", dedupeKey: "d", eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; }, logger: () => {} });
   await runtime.start();
   const before = calls;
   (s as any).emit({ event_type: "item_listed" });
@@ -178,7 +181,7 @@ test("bounded ingress fails closed on overload and drains admitted events", asyn
   const gate = new Promise<void>((resolve) => { release = resolve; });
   let persisted = 0;
   const fakeController = { async start() { return { state: "READY" }; }, async runOnce() { return { outcome: "idle", applyResult: null }; }, async stop() {} } as any;
-  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", ingressCapacity: 2, createPool: () => pool(), createController: () => fakeController, createStream: () => s.client, persistEvent: async () => { persisted += 1; await gate; return { outcome: "inserted_pending", eventId: String(persisted), dedupeKey: String(persisted), eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; }, logger: () => {} });
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", ingressCapacity: 2, createPool: () => pool(), createController: () => fakeController, createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, persistEvent: async () => { persisted += 1; await gate; return { outcome: "inserted_pending", eventId: String(persisted), dedupeKey: String(persisted), eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; }, logger: () => {} });
   await runtime.start();
   (s as any).emit({ event_type: "item_listed" });
   (s as any).emit({ event_type: "item_listed" });
@@ -188,6 +191,87 @@ test("bounded ingress fails closed on overload and drains admitted events", asyn
   await runtime.stop();
   assert.equal(persisted, 2);
   assert.ok(log.includes("disconnect"));
+});
+
+test("persistence failure is fatal and rejects subsequent callbacks", async () => {
+  const s = stream([], []);
+  let calls = 0;
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]), createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, persistEvent: async () => { calls += 1; throw new Error("persist down"); }, logger: () => {} });
+  await runtime.start();
+  const termination = runtime.waitForTermination();
+  (s as any).emit({ event_type: "item_listed" });
+  for (let i = 0; i < 100 && runtime.counters.ingressErrors === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  (s as any).emit({ event_type: "item_sold" });
+  const result = await termination;
+  assert.equal(result.reason, "INGRESS_PERSISTENCE_FAILURE");
+  assert.equal(result.fatal, true);
+  assert.equal(calls, 1);
+});
+
+test("Stream error is fatal and later callbacks are ignored", async () => {
+  const log: string[] = [];
+  const s = stream([], log);
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller(log), createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, logger: () => {} });
+  await runtime.start();
+  const termination = runtime.waitForTermination();
+  s.error(new Error("socket gap"));
+  (s as any).emit({ event_type: "item_listed" });
+  const result = await termination;
+  assert.equal(result.reason, "STREAM_ERROR");
+  assert.equal(result.fatal, true);
+  assert.equal(runtime.counters.streamErrors, 1);
+  assert.ok(log.includes("disconnect"));
+});
+
+test("synchronous Stream setup error cannot leave a healthy runtime", async () => {
+  const s = stream([], []);
+  let streams = 0;
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]), createStream: (_key, error) => { streams += 1; error(new Error("setup failure")); s.setErrorCallback(error); return s.client; }, logger: () => {} });
+  await assert.rejects(() => runtime.start(), /STREAM_ERROR_DURING_STARTUP/);
+  const result = await runtime.waitForTermination();
+  assert.equal(streams, 1);
+  assert.equal(result.reason, "STREAM_ERROR");
+  assert.equal(result.fatal, true);
+});
+
+test("worker failure reaches fatal runtime termination", async () => {
+  const s = stream([], []);
+  const fakeController = { async start() { return { state: "READY" }; }, async runOnce() { throw new Error("worker failure"); }, async stop() {} } as any;
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => fakeController, createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, logger: () => {} });
+  await runtime.start();
+  const result = await runtime.waitForTermination();
+  assert.equal(result.reason, "WORKER_ERROR");
+  assert.equal(result.fatal, true);
+});
+
+test("disconnect timeout cannot block cleanup or termination", async () => {
+  const s = stream([], []);
+  const log: string[] = [];
+  (s.client as any).disconnect = () => { log.push("disconnect_stuck"); };
+  let controllerStopped = false;
+  const fakeController = { async start() { return { state: "READY" }; }, async runOnce() { return { outcome: "idle", applyResult: null }; }, async stop() { controllerStopped = true; } } as any;
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", streamDisconnectTimeoutMs: 5, createPool: () => pool(), createController: () => fakeController, createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, logger: (message) => log.push(message) });
+  await runtime.start();
+  const started = Date.now();
+  const termination = runtime.waitForTermination();
+  await runtime.stop();
+  const result = await termination;
+  assert.equal(result.fatal, false);
+  assert.equal(controllerStopped, true);
+  assert.ok(Date.now() - started < 500);
+  assert.ok(log.includes("stream_disconnect_timeout"));
+});
+
+test("operator stop is non-fatal and entrypoint awaits runtime termination", async () => {
+  const script = await readFile(path.resolve(import.meta.dirname, "../scripts/runProductionIngestion.ts"), "utf8");
+  assert.match(script, /waitForTermination/);
+  assert.match(script, /termination\.fatal/);
+  const s = stream([], []);
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]), createStream: (_key, error) => { s.setErrorCallback(error); return s.client; }, logger: () => {} });
+  await runtime.start();
+  const termination = runtime.waitForTermination();
+  await runtime.stop();
+  assert.equal((await termination).fatal, false);
 });
 
 test("production runtime reuses the accepted durable controller", async () => {

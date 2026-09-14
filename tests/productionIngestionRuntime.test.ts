@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { eventTypesForProfile } from "../src/eventTypes.js";
-import { assertProductionProfile, PRODUCTION_EVENT_TYPES, ProductionIngestionRuntime, productionDatabasePreflight } from "../src/runtime/productionIngestionRuntime.js";
+import { assertProductionProfile, createProductionInboxController, PRODUCTION_EVENT_TYPES, ProductionIngestionRuntime, productionDatabasePreflight } from "../src/runtime/productionIngestionRuntime.js";
+import { DEFAULT_DURABLE_INBOX_READINESS_POLICY, evaluateDurableInboxReadiness } from "../src/runtime/durableInboxRuntimeController.js";
 
 function pool(database = "server_otg") {
   const queries: string[] = [];
@@ -24,9 +25,10 @@ function pool(database = "server_otg") {
 }
 
 function controller(log: string[]) {
+  let runs = 0;
   return {
     async start() { log.push("controller:start"); return { state: "READY" }; },
-    async runOnce() { log.push("worker"); return { outcome: "processed", applyResult: { outcome: "applied" } }; },
+    async runOnce() { runs += 1; log.push("worker"); return runs === 1 ? { outcome: "processed", applyResult: { outcome: "applied" } } : { outcome: "idle", applyResult: null }; },
     async stop() { log.push("controller:stop"); }
   } as any;
 }
@@ -51,6 +53,25 @@ test("production profile rejects orders-only and transfers-only", () => {
   assert.doesNotThrow(() => assertProductionProfile("all"));
   assert.throws(() => assertProductionProfile("orders"), /hard-pinned/);
   assert.throws(() => assertProductionProfile("transfers"), /hard-pinned/);
+});
+
+test("production controller permits a 30-day pending backlog without weakening the generic policy", async () => {
+  let recovery = 0;
+  let runs = 0;
+  const metrics = { pendingTotal: 13, pendingDue: 13, pendingScheduled: 0, processingTotal: 0, staleProcessing: 0, failedTotal: 0, reconciliationRequiredTotal: 0, appliedTotal: 0, ignoredOlderTotal: 0, oldestPendingReceivedAt: "2026-08-15T00:00:00.000Z", oldestDueAgeMs: 30 * 24 * 60 * 60 * 1000, maxAttemptCount: 0 };
+  const guard = { held: true, release: async () => { guard.held = false; } };
+  const controller = createProductionInboxController(pool(), {
+    preflight: async () => {},
+    startupRecovery: async () => { recovery += 1; },
+    acquireGuard: async () => guard,
+    getMetrics: async () => metrics,
+    runWorkerOnce: async () => ({ outcome: ++runs <= 13 ? "processed" : "idle", eventId: null, applyResult: null, retryResult: null }) as any
+  });
+  const summary = await controller.start();
+  assert.equal(summary.state, "READY");
+  assert.equal(recovery, 1);
+  assert.equal(evaluateDurableInboxReadiness(metrics).ready, false);
+  await controller.stop();
 });
 
 test("production preflight rejects wrong database before stream", async () => {
@@ -90,7 +111,7 @@ test("stream events cross the durable inbox boundary and are serialized", async 
   await runtime.stop();
   assert.equal(persisted.length, 2);
   assert.equal(runtime.counters.inboxInsertedPending, 2);
-  assert.equal(runtime.counters.workerApplied, 3);
+  assert.equal(runtime.counters.workerApplied, 1);
   assert.ok(log.includes("disconnect"));
   assert.ok(log.includes("controller:stop"));
 });
@@ -118,8 +139,59 @@ test("runtime source does not import Active Listings or exact-order transports",
   assert.doesNotMatch(source, /applyOrderEvent|applyTransferEvent|listingRepository|nftStateRepository/);
 });
 
+test("worker pump drains startup backlog without Stream events", async () => {
+  const log: string[] = [];
+  const s = stream([], log);
+  let calls = 0;
+  const fakeController = {
+    async start() { return { state: "READY" }; },
+    async runOnce() { calls += 1; return calls <= 13 ? { outcome: "processed", applyResult: { outcome: "reconciliation_required" } } : { outcome: "idle", applyResult: null }; },
+    async stop() {}
+  } as any;
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => fakeController, createStream: () => s.client, workerPollMs: 10000, logger: () => {} });
+  await runtime.start();
+  for (let i = 0; i < 100 && calls < 14; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  await runtime.stop();
+  assert.equal(calls, 14);
+  assert.equal(runtime.counters.workerReconciliationRequired, 13);
+});
+
+test("inserted pending wakes an idle worker without per-event runOnce coupling", async () => {
+  const s = stream([], []);
+  let calls = 0;
+  const fakeController = { async start() { return { state: "READY" }; }, async runOnce() { calls += 1; return { outcome: "idle", applyResult: null }; }, async stop() {} } as any;
+  let persisted = false;
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => fakeController, createStream: () => s.client, workerPollMs: 10000, persistEvent: async () => { persisted = true; return { outcome: "inserted_pending", eventId: "1", dedupeKey: "d", eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; }, logger: () => {} });
+  await runtime.start();
+  const before = calls;
+  (s as any).emit({ event_type: "item_listed" });
+  for (let i = 0; i < 100 && calls <= before; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  await runtime.stop();
+  assert.equal(persisted, true);
+  assert.ok(calls > before);
+});
+
+test("bounded ingress fails closed on overload and drains admitted events", async () => {
+  const log: string[] = [];
+  const s = stream([], log);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let persisted = 0;
+  const fakeController = { async start() { return { state: "READY" }; }, async runOnce() { return { outcome: "idle", applyResult: null }; }, async stop() {} } as any;
+  const runtime = new ProductionIngestionRuntime({ confirmProductionIngestion: true, apiKey: "test-key", ingressCapacity: 2, createPool: () => pool(), createController: () => fakeController, createStream: () => s.client, persistEvent: async () => { persisted += 1; await gate; return { outcome: "inserted_pending", eventId: String(persisted), dedupeKey: String(persisted), eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; }, logger: () => {} });
+  await runtime.start();
+  (s as any).emit({ event_type: "item_listed" });
+  (s as any).emit({ event_type: "item_listed" });
+  (s as any).emit({ event_type: "item_listed" });
+  assert.equal(runtime.counters.ingressOverloadFatal, 1);
+  release();
+  await runtime.stop();
+  assert.equal(persisted, 2);
+  assert.ok(log.includes("disconnect"));
+});
+
 test("production runtime reuses the accepted durable controller", async () => {
   const source = await readFile(path.resolve(import.meta.dirname, "../src/runtime/productionIngestionRuntime.ts"), "utf8");
   assert.match(source, /DurableInboxRuntimeController/);
-  assert.match(source, /controller\?\.runOnce/);
+  assert.match(source, /controller!\.runOnce/);
 });

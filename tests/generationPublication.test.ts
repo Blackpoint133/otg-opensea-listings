@@ -68,8 +68,16 @@ test("raw publication tampering fails closed", () => {
 test("strict DB row decoder cross-binds every duplicated column", () => {
   const value = publication(4); const row = rowFrom(value);
   assert.equal(decodeGenerationPublicationRow(row).generationPublicationId, value.generationPublicationId);
-  for (const key of ["publication_state", "publication_sequence", "generation_commitment_id", "generation_publication_id", "source_evidence_hash", "candidate_model_version"]) {
-    const tampered = { ...row, [key]: key === "publication_sequence" ? 99 : key === "publication_state" ? "REJECTED" : "x" };
+  const alternate: Record<string, unknown> = {
+    generation_publication_id: "f".repeat(64), generation_commitment_id: "e".repeat(64), publication_sequence: 99,
+    publication_state: "REJECTED", sweep_id: "sweep-2", generation_root_hash: "a".repeat(64),
+    candidate_artifact_hash: "b".repeat(64), barrier_artifact_hash: "c".repeat(64), candidate_model_version: "future-candidate",
+    generation_model_version: "future-generation", verifier_schema_version: "future-schema", verifier_policy_version: "future-policy",
+    provider_contract_version: "future-provider", normalizer_version: "future-normalizer",
+    scope: { ...scope, protocolAddress: "0x" + "2".repeat(40) }, source_evidence_hash: "d".repeat(64), created_at: "2026-09-14T00:00:00.000Z"
+  };
+  for (const key of Object.keys(alternate)) {
+    const tampered = { ...row, [key]: alternate[key] };
     assert.throws(() => decodeGenerationPublicationRow(tampered), /GENERATION_PUBLICATION_DURABLE_CORRUPTION/);
   }
 });
@@ -101,9 +109,12 @@ test("trusted VERIFIED evidence publishes only for a protocol proven by candidat
     assert.deepEqual(provenCandidateProtocolAddresses(fixture.evidence), [fixture.protocolAddress]);
     const source = { integratedEvidence: fixture.evidence, protocolAddress: fixture.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" };
     const db = new PublicationDb(); const store = new PostgresGenerationPublicationStore(db);
-    const first = await store.publish(source); const replay = await store.publish(source);
+    const first = await store.publish(source); const updatesAfterFirst = db.sql.filter((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")).length; const insertsAfterFirst = db.sql.filter((sql) => sql.toLowerCase().startsWith("insert into public.targeted_verifier_generation_publications")).length; const replay = await store.publish(source);
     assert.equal(first.publicationState, "ACCEPTED"); assert.equal(first.generationPublicationId, replay.generationPublicationId); assert.equal(first.publicationSequence, replay.publicationSequence); assert.equal(db.rows.length, 1);
+    assert.equal(db.sql.filter((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")).length, updatesAfterFirst); assert.equal(db.sql.filter((sql) => sql.toLowerCase().startsWith("insert into public.targeted_verifier_generation_publications")).length, insertsAfterFirst); assert.equal(db.sequence, first.publicationSequence);
+    const updatesBeforeUnproven = db.sql.filter((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")).length; const insertsBeforeUnproven = db.sql.filter((sql) => sql.toLowerCase().startsWith("insert into public.targeted_verifier_generation_publications")).length; const sequenceBeforeUnproven = db.sequence; const rowsBeforeUnproven = db.rows.length;
     await assert.rejects(store.publish({ ...source, protocolAddress: "0x" + "2".repeat(40) }), /PROTOCOL_ADDRESS_NOT_PROVEN/);
+    assert.equal(db.sql.filter((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")).length - updatesBeforeUnproven, 0); assert.equal(db.sql.filter((sql) => sql.toLowerCase().startsWith("insert into public.targeted_verifier_generation_publications")).length - insertsBeforeUnproven, 0); assert.equal(db.sequence, sequenceBeforeUnproven); assert.equal(db.rows.length, rowsBeforeUnproven);
   } finally { await disposeTrustedContexts(fixture.root); }
 });
 test("trusted ABORTED evidence is rejected before sequence allocation", async () => {
@@ -120,6 +131,16 @@ test("trusted foreign manifest scope is rejected before sequence allocation", as
     const db = new PublicationDb(); const store = new PostgresGenerationPublicationStore(db);
     await assert.rejects(store.publish({ integratedEvidence: fixture.evidence, protocolAddress: fixture.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" }), /UNSUPPORTED_GENERATION_SCOPE/);
     assert.equal(db.sequence, 0); assert.equal(db.rows.length, 0); assert.equal(db.sql.some((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")), false);
+  } finally { await disposeTrustedContexts(fixture.root); }
+});
+test("initial findExisting corruption fails closed before allocation or insert", async () => {
+  const fixture = await makeTrustedContexts();
+  try {
+    const source = { integratedEvidence: fixture.evidence, protocolAddress: fixture.protocolAddress, createdAt: "2026-09-13T00:00:00.000Z" }; const intended = createGenerationPublicationEvidence(source, 0); const independent = publication(77, "z"); const db = new PublicationDb();
+    db.rows.push({ ...rowFrom(independent), generation_commitment_id: intended.generationCommitmentId, source_evidence_hash: intended.sourceEvidenceHash, publication_state: "ACCEPTED" });
+    const store = new PostgresGenerationPublicationStore(db); const updatesBefore = db.sql.filter((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")).length; const insertsBefore = db.sql.filter((sql) => sql.toLowerCase().startsWith("insert into public.targeted_verifier_generation_publications")).length;
+    await assert.rejects(store.publish(source), /GENERATION_PUBLICATION_DURABLE_CORRUPTION/);
+    assert.equal(db.sql.filter((sql) => sql.toLowerCase().startsWith("update public.targeted_verifier_generation_publication_sequence")).length - updatesBefore, 0); assert.equal(db.sql.filter((sql) => sql.toLowerCase().startsWith("insert into public.targeted_verifier_generation_publications")).length - insertsBefore, 0); assert.equal(db.sequence, 0); assert.ok(db.sql.some((sql) => sql.toLowerCase() === "rollback"));
   } finally { await disposeTrustedContexts(fixture.root); }
 });
 test("transactional harness proves overlapping different publications allocate distinct committed sequences", async () => {

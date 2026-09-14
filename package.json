@@ -11,6 +11,7 @@
     "probe:active-listings": "tsx scripts/runActiveListingsProbe.ts",
     "test:durable-inbox-pg": "tsx scripts/testDurableInboxPg.ts",
     "test:active-order-suppression-pg": "tsx scripts/testActiveOrderSuppressionPg.ts",
+    "shadow:audit": "tsx scripts/runShadowAudit.ts",
     "observe:active-order-canary-candidate": "tsx scripts/observeActiveOrderCanaryCandidate.ts",
     "precanary": "npm run build",
     "canary": "node dist/canary/runLiveCanary.js",

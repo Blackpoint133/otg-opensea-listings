@@ -124,4 +124,22 @@ export async function readGenerationDirectory(directory: string, sweepId: string
   return deepFreeze({ status: reasons.length > 0 ? "CORRUPT" : "COMPLETE", manifest, artifacts: manifest.artifacts, transitions, reasons });
 }
 
+class ReadOnlyFileEvidenceReader implements GenerationEvidenceReader {
+  constructor(private readonly directory: string, private readonly sweepId: string) {}
+  readGeneration(): Promise<EvidenceReadResult> { return readGenerationDirectory(this.directory, this.sweepId); }
+  async listArtifacts(): Promise<readonly ArtifactRef[]> { return (await this.readGeneration()).artifacts; }
+  async readArtifact(ref: ArtifactRef): Promise<ReadonlyArray<number>> { const file = safeRelative(this.directory, ref.relativePath); const bytes = new Uint8Array(await readFile(file)); if (bytes.byteLength !== ref.byteLength || sha256Bytes(bytes) !== ref.contentHash) throw new Error("ARTIFACT_HASH_MISMATCH"); return deepFreeze(Array.from(bytes)); }
+  private async jsonl<T>(name: string): Promise<readonly T[]> { const ref = (await this.listArtifacts()).find((item) => item.relativePath === name); if (!ref) throw new Error("ARTIFACT_MISSING"); const bytes = await this.readArtifact(ref); return deepFreeze(new TextDecoder().decode(Uint8Array.from(bytes)).split("\n").filter(Boolean).map((line) => JSON.parse(line) as T)); }
+  getSeenOrders(): Promise<readonly SeenOrderRecord[]> { return this.jsonl<SeenOrderRecord>("seen-orders.jsonl"); }
+  getCatchUpRounds(): Promise<readonly CatchUpRoundRecord[]> { return this.jsonl<CatchUpRoundRecord>("catchup-rounds.jsonl"); }
+  getTransitions(): Promise<readonly TransitionRecord[]> { return this.jsonl<TransitionRecord>("transitions.jsonl"); }
+}
+
+export async function openGenerationEvidenceReader(generationDirectory: string, sweepId: string): Promise<GenerationEvidenceReader> {
+  const directory = path.resolve(generationDirectory);
+  const result = await readGenerationDirectory(directory, sweepId);
+  if (result.status !== "COMPLETE") throw new Error("GENERATION_EVIDENCE_UNAVAILABLE");
+  return new ReadOnlyFileEvidenceReader(directory, sweepId);
+}
+
 export { FileEvidenceStore, validateTransitionSequence };

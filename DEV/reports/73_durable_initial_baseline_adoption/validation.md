@@ -4,7 +4,7 @@ Direct TypeScript build: PASS.
 
 Direct TypeScript typecheck (`--noEmit`): PASS.
 
-Focused adoption tests: 3 tests, 3 passed, 0 failed, 0 skipped. They verify migration-009 shape/constraints (including `snapshot_artifact_hash`), accepted snapshot artifact writing, and runtime rejection of forged, spread-cloned, and JSON-round-tripped plans. Existing 71G1 projection/window suites remained green in the hermetic run.
+Focused adoption tests: 4 tests, 4 passed, 0 failed, 0 skipped. They verify migration-009 shape/constraints (including `snapshot_artifact_hash`), accepted snapshot artifact writing, real projection/evidence/publication/plan construction, runtime rejection of forged plans, and an executable adoption transaction with lock ordering and atomic commit. Existing 71G1 projection/window suites remained green in the hermetic run.
 
 Hermetic suite: PASS (all executed tests passed; no new failures attributable to Task 71G2).
 

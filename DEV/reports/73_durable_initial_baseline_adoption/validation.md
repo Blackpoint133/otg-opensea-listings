@@ -1,15 +1,15 @@
 # Task 71G2 validation
 
+Focused executable adoption coverage: 14 tests, 14 passed, 0 failed, 0 skipped. The tests execute the real root-bound plan constructor and `PostgresInitialBaselineAdoptionStore` against a deterministic fake transaction client.
+
+Coverage includes successful root-bound plan construction; snapshot artifact and economic-field tamper rejection (seller, price, expiration, raw listing, raw-page/normalized disagreement, missing artifact, wrong artifact hash); runtime plan provenance; lock ordering; current-publication exact/newer/empty/conflict cases; null-chain, order-lifecycle, transfer, malformed identity and resolved-status post-stable fences; local-state and expiration preconditions; receipt/listing/count atomic rollback; PostgreSQL `Date` timestamp exact retry; later Stream mutation retry safety; receipt scalar and linked-row corruption; and complete two-listing adoption.
+
 Direct TypeScript build: PASS.
 
 Direct TypeScript typecheck (`--noEmit`): PASS.
 
-Focused adoption tests: 4 tests, 4 passed, 0 failed, 0 skipped. They verify migration-009 shape/constraints (including `snapshot_artifact_hash`), accepted snapshot artifact writing, real projection/evidence/publication/plan construction, runtime rejection of forged plans, and an executable adoption transaction with lock ordering and atomic commit. Existing 71G1 projection/window suites remained green in the hermetic run.
-
-Hermetic suite: PASS (all executed tests passed; no new failures attributable to Task 71G2).
-
-The implementation includes executable transaction paths for root-bound snapshot artifact verification, raw-page re-normalization, publication binding, deterministic lock ordering, bounded lock timeout, strict null-chain and canonical-hash post-stable fencing, node-postgres Date timestamp decoding, empty-state and expiration checks, atomic receipt/row insertion, and exact idempotent retry/corruption handling. Migration SQL is code-reviewed only and was not applied to production.
+Hermetic suite: PASS — 1,152 tests, 1,152 passed, 0 failed, 0 skipped.
 
 `git diff --check`: PASS.
 
-No production database access, OpenSea request, API-key read, generation publication, verifier attempt, shadow decision, migration application, journal mutation, NFT-state write, or authority grant occurred.
+Migration 009 is implemented but not applied. No production database access, migration application, OpenSea request, API-key read, generation publication, verifier attempt, shadow decision, journal mutation, NFT-state write, or authority grant occurred.

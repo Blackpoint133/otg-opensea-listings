@@ -8,6 +8,8 @@ import { validateOfflineCandidateBundle, type OfflineCandidateBundle } from "./o
 import type { InitialGenerationBaselineProjection } from "./initialGenerationBaseline.js";
 
 const SCOPE_SCHEMA = "generation-window-scope-v1" as const;
+const trustedScopes = new WeakSet<object>();
+const trustedScopeMaterial = new WeakMap<object, { readonly scopeFingerprint: string; readonly orderHashes: ReadonlySet<string>; readonly nftKeys: ReadonlySet<string> }>();
 const statuses = new Set(["pending", "processing", "applied", "reconciliation_required", "failed", "ignored_duplicate", "ignored_older"]);
 const orderEvents = new Set(["item_listed", "item_sold", "item_cancelled", "order_invalidate", "order_revalidate"]);
 
@@ -76,13 +78,16 @@ export function createGenerationWindowScopeFromInitialProjection(projection: Ini
     identities.push(local.identity);
   }
   if (candidates.size !== identities.length || typeof projection.protocolAddress !== "string" || identities.some((identity) => identity.protocolAddress !== projection.protocolAddress)) throw new Error("GENERATION_WINDOW_SCOPE_PROTOCOL_MISMATCH");
-  return createScopeFromIdentities(identities);
+  const scope = createScopeFromIdentities(identities);
+  trustedScopes.add(scope);
+  trustedScopeMaterial.set(scope, { scopeFingerprint: scope.scopeFingerprint, orderHashes: new Set(scope.identities.map((identity) => identity.orderHash)), nftKeys: new Set(scope.identities.map(scopeKey)) });
+  return scope;
 }
 function scopeSets(scope: GenerationWindowScope): { orderHashes: ReadonlySet<string>; nftKeys: ReadonlySet<string> } {
-  if (scope === null || typeof scope !== "object" || !Array.isArray(scope.identities) || scope.identities.length === 0) throw new Error("GENERATION_WINDOW_SCOPE_EMPTY");
-  const checked = createScopeFromIdentities(scope.identities);
-  if (scope.scopeFingerprint !== checked.scopeFingerprint) throw new Error("GENERATION_WINDOW_SCOPE_FINGERPRINT_MISMATCH");
-  return { orderHashes: new Set(checked.identities.map((identity) => identity.orderHash)), nftKeys: new Set(checked.identities.map(scopeKey)) };
+  if (scope === null || typeof scope !== "object" || !trustedScopes.has(scope)) throw new Error("GENERATION_WINDOW_SCOPE_UNTRUSTED");
+  const material = trustedScopeMaterial.get(scope);
+  if (!material || scope.scopeFingerprint !== material.scopeFingerprint) throw new Error("GENERATION_WINDOW_SCOPE_FINGERPRINT_MISMATCH");
+  return material;
 }
 function supportedOrder(row: EventRow): boolean {
   if (row.chain === null) throw new Error("GENERATION_WINDOW_MALFORMED_IDENTITY");

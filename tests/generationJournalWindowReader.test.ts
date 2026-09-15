@@ -5,6 +5,7 @@ import { createGenerationWindowScopeFromInitialProjection, PostgresGenerationJou
 import * as generationWindowReaderModule from "../src/reconciliation/generationJournalWindowReader.js";
 import { ActiveListingsClient, ACTIVE_LISTINGS_CONTRACT } from "../src/activeListings.js";
 import { projectInitialGenerationBaseline } from "../src/reconciliation/initialGenerationBaseline.js";
+import { sha256Canonical } from "../src/reconciliation/evidence/canonicalEvidence.js";
 import { evaluateOfflineGeneration } from "../src/reconciliation/offlineGenerationBarrierModel.js";
 import { classifyOfflineCandidates, type OfflineLocalOrder, type OfflineSweepManifest } from "../src/reconciliation/offlineCandidateModel.js";
 
@@ -66,6 +67,7 @@ test("scope is projection-bound, immutable, fingerprinted, and rejects arbitrary
   assert.throws(() => (createGenerationWindowScopeFromInitialProjection as unknown as (value: unknown) => unknown)([]));
 });
 test("real initial projection binds both NFTs and matching transfer", async () => { const projection = await realProjection(); const bound = createGenerationWindowScopeFromInitialProjection(projection); assert.equal(bound.identities.length, 2); const transfer = row(1, "item_transferred", "reconciliation_required", { token_id: "8" }); const pool = new FakePool([transfer], [0, 1]); const reader = new PostgresGenerationJournalWindowReader(pool); const start = await reader.captureStart(); const observed = await reader.observe(start, bound); assert.equal(observed.round.reconciliationRequiredCount, 1); assert.equal(observed.scopeFingerprint, bound.scopeFingerprint); });
+test("runtime provenance rejects correct-fingerprint subsets and clones", async () => { const projection = await realProjection(); const trusted = createGenerationWindowScopeFromInitialProjection(projection); const subsetIdentities = [trusted.identities[0]]; const forged = { identities: subsetIdentities, scopeFingerprint: sha256Canonical({ schema: "generation-window-scope-v1", identities: subsetIdentities }) } as any; const spread = { ...trusted }; const roundTrip = JSON.parse(JSON.stringify(trusted)); const pool = new FakePool([row(1, "item_transferred", "reconciliation_required", { token_id: "8" })], [0, 1]); const reader = new PostgresGenerationJournalWindowReader(pool); const start = await reader.captureStart(); for (const candidateScope of [forged, spread, roundTrip]) await assert.rejects(() => reader.observe(start, candidateScope), /GENERATION_WINDOW_SCOPE_UNTRUSTED/); const observed = await reader.observe(start, trusted); assert.equal(observed.round.reconciliationRequiredCount, 1); });
 
 test("zero journal has deterministic zero watermark", async () => {
   const pool = new FakePool([], [0, 0]);
@@ -77,8 +79,8 @@ test("historical rows and specialized backlog are excluded by exact window", asy
   const rows = Array.from({ length: 1233 }, (_, i) => row(i + 1, "item_transferred", "reconciliation_required", { token_id: "99" }));
   rows.push(...Array.from({ length: 13 }, (_, i) => row(1234 + i, "item_transferred", "pending", { token_id: "99", raw_payload: { payload: { rest_backfill_source: { source: "opensea_rest_events_backfill" } } } })));
   rows.push(row(1247, "item_transferred", "reconciliation_required"), row(1248, "item_transferred", "pending", { token_id: "99" }));
-  const pool = new FakePool(rows, [1233, 1248]); const reader = new PostgresGenerationJournalWindowReader(pool); const start = await reader.captureStart(); const observed = await reader.observe(start, scope());
-  assert.equal(observed.round.reconciliationRequiredCount, 1); assert.equal(observed.round.pendingCount, 0); assert.ok(observed.eventIds.includes("1247")); assert.ok(!observed.eventIds.includes("1233"));
+  const pool = new FakePool(rows, [1246, 1248]); const reader = new PostgresGenerationJournalWindowReader(pool); const start = await reader.captureStart(); const observed = await reader.observe(start, scope());
+  assert.equal(start.eventHighWaterBefore.eventId, "1246"); assert.equal(observed.round.reconciliationRequiredCount, 1); assert.equal(observed.round.pendingCount, 0); assert.ok(observed.eventIds.includes("1247")); assert.ok(!observed.eventIds.includes("1233")); assert.ok(!observed.eventIds.includes("1246"));
 });
 
 test("matching transfer blocks and unrelated canonical transfer does not", async () => {

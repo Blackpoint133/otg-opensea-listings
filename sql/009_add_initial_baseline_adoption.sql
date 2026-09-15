@@ -7,6 +7,7 @@ CREATE TABLE public.opensea_listings_initial_baseline_adoptions (
   publication_sequence bigint NOT NULL CHECK (publication_sequence >= 0),
   sweep_id text NOT NULL,
   source_evidence_hash text NOT NULL CHECK (source_evidence_hash ~ '^[0-9a-f]{64}$'),
+  snapshot_artifact_hash text NOT NULL CHECK (snapshot_artifact_hash ~ '^[0-9a-f]{64}$'),
   generation_root_hash text NOT NULL CHECK (generation_root_hash ~ '^[0-9a-f]{64}$'),
   candidate_artifact_hash text NOT NULL CHECK (candidate_artifact_hash ~ '^[0-9a-f]{64}$'),
   barrier_artifact_hash text NOT NULL CHECK (barrier_artifact_hash ~ '^[0-9a-f]{64}$'),

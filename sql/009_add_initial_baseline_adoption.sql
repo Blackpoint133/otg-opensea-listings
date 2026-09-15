@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE TABLE public.opensea_listings_initial_baseline_adoptions (
   schema_version text NOT NULL,
-  adoption_id text PRIMARY KEY,
+  adoption_id text PRIMARY KEY CHECK (adoption_id ~ '^[0-9a-f]{64}$'),
   generation_publication_id text NOT NULL REFERENCES public.targeted_verifier_generation_publications(generation_publication_id),
   publication_sequence bigint NOT NULL CHECK (publication_sequence >= 0),
   sweep_id text NOT NULL,

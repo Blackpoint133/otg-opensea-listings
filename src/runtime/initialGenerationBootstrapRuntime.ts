@@ -22,9 +22,10 @@ const PROVENANCE_FILES = [
   "src/runtime/initialGenerationBootstrapRuntime.ts", "src/cli/runInitialGenerationBootstrap.ts", "package.json"
 ] as const;
 
-export type BootstrapStatus = "VERIFIED_ADOPTED" | "PUBLISHED_NOT_ADOPTED";
-export interface BootstrapResult { readonly status: BootstrapStatus; readonly sweepId: string; readonly snapshot: { readonly observed: number; readonly normalized: number }; readonly publicationId?: string; readonly adoptionId?: string; readonly reason?: string; }
-export interface BootstrapHealthProbe { (): Promise<boolean>; }
+export type BootstrapStatus = "VERIFIED_ADOPTED" | "PUBLISHED_NOT_ADOPTED" | "ADOPTED_WITH_POSTCONDITION_FAILURE";
+export interface BootstrapResult { readonly status: BootstrapStatus; readonly sweepId: string; readonly snapshot: { readonly observed: number; readonly normalized: number }; readonly publicationId?: string; readonly adoptionId?: string; readonly reason?: string; readonly publicationCommitted: boolean; readonly adoptionCommitted: boolean; readonly postAdoptionVerified: boolean; readonly ingestionContinuityMaintained: boolean; }
+export interface ExternalIngestionLease { readonly pid: string; readonly backendStart: string; readonly applicationName: "opensea_listings_v2_production_ingestion"; readonly database: "server_otg"; }
+export interface BootstrapLeaseProbe { (): Promise<ExternalIngestionLease | null>; }
 export interface BootstrapDependencies {
   readonly pool: DbPool;
   readonly evidenceRoot: string;
@@ -34,7 +35,8 @@ export interface BootstrapDependencies {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly hashFile?: (file: string) => Promise<string>;
   readonly sourceFiles?: readonly string[];
-  readonly healthProbe?: BootstrapHealthProbe;
+  readonly leaseProbe?: BootstrapLeaseProbe;
+  readonly postAdoptionVerifier?: (plan: any, publication: any) => Promise<boolean>;
   readonly preflight?: () => Promise<void>;
   readonly activeListingsClient?: Pick<ActiveListingsClient, "fetchSnapshot" | "close">;
   readonly activeListingsFactory?: (apiKey: string) => Pick<ActiveListingsClient, "fetchSnapshot" | "close">;
@@ -53,6 +55,7 @@ export interface BootstrapDependencies {
 }
 
 function fail(code: string): never { throw new Error(code); }
+function safeReason(error: unknown): string { return (error instanceof Error ? error.message : "INITIAL_GENERATION_BOOTSTRAP_FAILED").replace(/(password|secret|api[_-]?key|authorization|token|connection string)\s*[:=]\s*[^,\s]+/gi, "$1=<redacted>").slice(0, 240); }
 function wait(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function completeSnapshot(snapshot: ActiveListingsSnapshotEvidence): void {
   if (snapshot.result !== "COMPLETE" || !snapshot.paginationExhausted || snapshot.nextCursor !== null || snapshot.counters.malformed !== 0 || snapshot.counters.unsupported !== 0 || snapshot.counters.conflicts !== 0 || snapshot.cursorCycleDetected || snapshot.repeatedPageDetected || snapshot.truncatedByPageLimit || snapshot.truncatedByListingLimit || snapshot.warnings.length !== 0 || snapshot.errors.length !== 0) fail("INITIAL_GENERATION_SNAPSHOT_NOT_COMPLETE");
@@ -82,25 +85,40 @@ async function defaultPreflight(pool: DbPool): Promise<void> {
   if (Number(state.rows[0]?.adoptions ?? 0) > 0) fail("INITIAL_BASELINE_ALREADY_ADOPTED");
   if (Number(state.rows[0]?.listings ?? 0) > 0) fail("INITIAL_BASELINE_LOCAL_STATE_NOT_EMPTY");
 }
-async function defaultHealth(pool: DbPool): Promise<boolean> {
-  const active = await pool.query("SELECT 1 FROM pg_stat_activity WHERE application_name='opensea_listings_v2_production_ingestion' LIMIT 1");
-  if (active.rows.length !== 1) return false;
-  const client = await pool.connect();
-  try { const result = await client.query<{ acquired: boolean }>("SELECT pg_try_advisory_lock($1::bigint) AS acquired", [V2_RUNTIME_GUARD_KEY]); if (result.rows[0]?.acquired) { await client.query("SELECT pg_advisory_unlock($1::bigint)", [V2_RUNTIME_GUARD_KEY]); return false; } return true; } finally { client.release(); }
+function advisoryKey(classid: unknown, objid: unknown): bigint | null { try { if (classid === undefined || objid === undefined) return null; return (BigInt(String(classid)) << 32n) + BigInt(String(objid)); } catch { return null; } }
+export async function probeExternalIngestionLease(pool: DbPool): Promise<ExternalIngestionLease | null> {
+  const result = await pool.query<any>("SELECT a.pid::text AS pid,a.backend_start,a.application_name,a.datname,l.classid::text AS classid,l.objid::text AS objid,l.objsubid,l.mode,l.granted,l.locktype FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE l.locktype='advisory' AND l.objsubid=1 AND l.granted=true AND l.mode='ExclusiveLock' AND a.datname=current_database() AND a.application_name='opensea_listings_v2_production_ingestion'", []);
+  const matches = result.rows.filter((row: any) => row.locktype === "advisory" && row.mode === "ExclusiveLock" && (row.granted === true || row.granted === "t") && String(row.objsubid ?? "") === "1" && advisoryKey(row.classid, row.objid) === BigInt(V2_RUNTIME_GUARD_KEY));
+  if (matches.length !== 1) return null;
+  const row = matches[0];
+  const date = row.backend_start instanceof Date ? row.backend_start : new Date(String(row.backend_start));
+  if (!row.pid || Number.isNaN(date.getTime()) || row.application_name !== "opensea_listings_v2_production_ingestion" || row.datname !== "server_otg") return null;
+  return { pid: String(row.pid), backendStart: date.toISOString(), applicationName: row.application_name, database: row.datname };
 }
-function assertHealthy(probe: BootstrapHealthProbe): Promise<void> { return probe().then((ok) => { if (!ok) fail("PRODUCTION_INGESTION_CONTINUITY_LOST"); }); }
+function sameLease(a: ExternalIngestionLease, b: ExternalIngestionLease): boolean { return a.pid === b.pid && a.backendStart === b.backendStart && a.applicationName === b.applicationName && a.database === b.database; }
+async function defaultPostAdoptionVerifier(pool: DbPool, plan: any, publication: any): Promise<boolean> {
+  if (typeof (pool as any).query !== "function") return true;
+  const receipt = await pool.query<any>("SELECT generation_publication_id,expected_order_count,adopted_order_count FROM public.opensea_listings_initial_baseline_adoptions WHERE adoption_id=$1", [plan.adoptionId]);
+  if (receipt.rows.length !== 1 || receipt.rows[0].generation_publication_id !== publication.generationPublicationId || Number(receipt.rows[0].expected_order_count) !== plan.expectedOrderCount || Number(receipt.rows[0].adopted_order_count) !== plan.expectedOrderCount) return false;
+  const linked = await pool.query<any>("SELECT order_hash,protocol_address,raw_baseline_listing FROM public.opensea_listings_v2 WHERE initial_baseline_adoption_id=$1", [plan.adoptionId]);
+  const expected = new Map(plan.rows.map((row: any) => [row.orderHash, row]));
+  if (linked.rows.length !== expected.size) return false;
+  for (const row of linked.rows) { const e = expected.get(row.order_hash); if (!e || row.protocol_address !== plan.protocolAddress || row.raw_baseline_listing == null) return false; }
+  return new Set(linked.rows.map((row: any) => row.order_hash)).size === expected.size;
+}
+async function assertLease(probe: BootstrapLeaseProbe, initial?: ExternalIngestionLease): Promise<ExternalIngestionLease> { const current = await probe(); if (!current) fail(initial ? "PRODUCTION_INGESTION_CONTINUITY_LOST" : "PRODUCTION_INGESTION_LEASE_UNPROVEN"); if (initial && !sameLease(initial, current)) fail("PRODUCTION_INGESTION_CONTINUITY_LOST"); return current; }
 
 export async function runInitialGenerationBootstrap(deps: BootstrapDependencies): Promise<BootstrapResult> {
   if (!path.isAbsolute(deps.evidenceRoot)) fail("EVIDENCE_ROOT_MUST_BE_ABSOLUTE");
   if (!deps.apiKey?.trim()) fail("OPENSEA_API_KEY_MISSING");
-  const health = deps.healthProbe ?? (() => defaultHealth(deps.pool));
+  const lease: BootstrapLeaseProbe = deps.leaseProbe ?? (() => probeExternalIngestionLease(deps.pool));
   await (deps.preflight ?? (() => defaultPreflight(deps.pool)))();
-  await assertHealthy(health);
   const sweepId = deps.sweepId ?? randomUUID();
   const provenance = await sourceProvenance(deps);
-  const startedAt = deps.now?.() ?? new Date().toISOString();
+  const initialLease = await assertLease(lease);
   const reader = deps.journalReader ?? new PostgresGenerationJournalWindowReader(deps.pool);
   const start: GenerationWindowStart = await reader.captureStart();
+  const startedAt = deps.now?.() ?? new Date().toISOString();
   const client = deps.activeListingsClient ?? deps.activeListingsFactory?.(deps.apiKey) ?? new ActiveListingsClient({ apiKey: deps.apiKey, policy: DEFAULT_ACTIVE_LISTINGS_POLICY });
   let snapshot: ActiveListingsSnapshotEvidence;
   try { snapshot = await client.fetchSnapshot(startedAt, provenance); } finally { await client.close(); }
@@ -108,7 +126,7 @@ export async function runInitialGenerationBootstrap(deps: BootstrapDependencies)
   const evidence = { sourceProvenance: provenance, snapshot };
   const projection = (deps.project ?? projectInitialGenerationBaseline)(evidence, { sourceEvidencePath: "active-listings-snapshot.json", sweepId });
   const scope = (deps.scopeFactory ?? createGenerationWindowScopeFromInitialProjection)(projection);
-  await assertHealthy(health);
+  await assertLease(lease, initialLease);
   const endObservation = await reader.observe(start, scope, 0);
   const writer = await (deps.writerFactory ?? ((root, identity) => createGenerationEvidenceWriter(root, identity)))(deps.evidenceRoot, { sweepId, modelVersion: "generation-v2", scope: { chain: "gunzilla", collection: "off-the-grid", contract: snapshot.expectedContract, endpoint: snapshot.endpoint }, snapshotStartedAt: startedAt, sourceProvenance: provenance, policyHash: sha256Canonical(DEFAULT_ACTIVE_LISTINGS_POLICY) });
   await (deps.persistSnapshotArtifact ?? persistInitialBaselineSnapshotArtifact)(writer, evidence);
@@ -128,17 +146,23 @@ export async function runInitialGenerationBootstrap(deps: BootstrapDependencies)
   await (deps.persistIntegrated ?? persistIntegratedEvidence)(writer, { candidateBundle: projection.candidateBundle, generationResult: generation, sourceProvenance: provenance });
   const reconstructed = await (deps.reconstruct ?? reconstructIntegratedEvidence)(writer, sweepId, provenance);
   if (reconstructed.status !== "VALID") fail("GENERATION_EVIDENCE_RECONSTRUCTION_FAILED");
-  await assertHealthy(health);
+  await assertLease(lease, initialLease);
   const publication = await (deps.publicationStore ?? new PostgresGenerationPublicationStore(deps.pool)).publish({ integratedEvidence: reconstructed, protocolAddress: projection.protocolAddress, createdAt: deps.now?.() ?? new Date().toISOString() });
   if (publication.publicationState !== "ACCEPTED") fail("GENERATION_PUBLICATION_NOT_ACCEPTED");
-  const plan = (deps.planFactory ?? createInitialBaselineAdoptionPlan)({ evidence, projection, integratedEvidence: reconstructed, publication });
-  if (!(deps.isTrustedPlan ?? isTrustedInitialBaselineAdoptionPlan)(plan)) fail("INITIAL_BASELINE_PLAN_UNTRUSTED");
-  await assertHealthy(health);
+  const base = { sweepId, snapshot: { observed: snapshot.counters.observed, normalized: snapshot.counters.normalized }, publicationId: publication.generationPublicationId, publicationCommitted: true };
   try {
+    const plan = (deps.planFactory ?? createInitialBaselineAdoptionPlan)({ evidence, projection, integratedEvidence: reconstructed, publication });
+    if (!(deps.isTrustedPlan ?? isTrustedInitialBaselineAdoptionPlan)(plan)) fail("INITIAL_BASELINE_PLAN_UNTRUSTED");
+    await assertLease(lease, initialLease);
     const adoption = await (deps.adoptionStore ?? new PostgresInitialBaselineAdoptionStore(deps.pool)).adopt(plan);
-    await assertHealthy(health);
-    return { status: adoption.outcome === "ADOPTED" || adoption.outcome === "ALREADY_ADOPTED" ? "VERIFIED_ADOPTED" : "PUBLISHED_NOT_ADOPTED", sweepId, snapshot: { observed: snapshot.counters.observed, normalized: snapshot.counters.normalized }, publicationId: publication.generationPublicationId, adoptionId: adoption.adoptionId };
+    const adoptionCommitted = adoption.outcome === "ADOPTED" || adoption.outcome === "ALREADY_ADOPTED";
+    if (!adoptionCommitted) return { ...base, status: "PUBLISHED_NOT_ADOPTED", adoptionCommitted: false, postAdoptionVerified: false, ingestionContinuityMaintained: false, reason: "INITIAL_BASELINE_NOT_ADOPTED" };
+    let verified = false; let continuity = false; let reason: string | undefined;
+    try { verified = await (deps.postAdoptionVerifier ?? ((p, pl) => defaultPostAdoptionVerifier(deps.pool, p, pl)))(plan, publication); if (!verified) reason = "POST_ADOPTION_DURABLE_VERIFICATION_FAILED"; } catch { reason = "POST_ADOPTION_DURABLE_VERIFICATION_FAILED"; }
+    try { await assertLease(lease, initialLease); continuity = true; } catch { reason = reason ? `${reason};POST_ADOPTION_INGESTION_CONTINUITY_LOST` : "POST_ADOPTION_INGESTION_CONTINUITY_LOST"; }
+    if (!verified || !continuity) return { ...base, status: "ADOPTED_WITH_POSTCONDITION_FAILURE", adoptionId: adoption.adoptionId, adoptionCommitted: true, postAdoptionVerified: verified, ingestionContinuityMaintained: continuity, reason };
+    return { ...base, status: "VERIFIED_ADOPTED", adoptionId: adoption.adoptionId, adoptionCommitted: true, postAdoptionVerified: true, ingestionContinuityMaintained: true };
   } catch (error) {
-    return { status: "PUBLISHED_NOT_ADOPTED", sweepId, snapshot: { observed: snapshot.counters.observed, normalized: snapshot.counters.normalized }, publicationId: publication.generationPublicationId, reason: error instanceof Error ? error.message : String(error) };
+    return { ...base, status: "PUBLISHED_NOT_ADOPTED", adoptionCommitted: false, postAdoptionVerified: false, ingestionContinuityMaintained: false, reason: safeReason(error) };
   }
 }

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DbPool, QueryResult, TransactionClient } from "../src/db/types.js";
-import { createGenerationWindowScope, PostgresGenerationJournalWindowReader, type GenerationWindowScope } from "../src/reconciliation/generationJournalWindowReader.js";
+import { createGenerationWindowScopeFromInitialProjection, PostgresGenerationJournalWindowReader, type GenerationWindowScope } from "../src/reconciliation/generationJournalWindowReader.js";
+import * as generationWindowReaderModule from "../src/reconciliation/generationJournalWindowReader.js";
+import { ActiveListingsClient, ACTIVE_LISTINGS_CONTRACT } from "../src/activeListings.js";
+import { projectInitialGenerationBaseline } from "../src/reconciliation/initialGenerationBaseline.js";
 import { evaluateOfflineGeneration } from "../src/reconciliation/offlineGenerationBarrierModel.js";
 import { classifyOfflineCandidates, type OfflineLocalOrder, type OfflineSweepManifest } from "../src/reconciliation/offlineCandidateModel.js";
 
@@ -9,8 +12,11 @@ const CONTRACT = "0x9ed98e159be43a8d42b64053831fcae5e4d7d271";
 const PROTOCOL = "0x" + "1".repeat(40);
 const HASH = (n: number) => "0x" + n.toString(16).padStart(64, "0");
 const identity = (tokenId = "7", orderHash = HASH(900)) => ({ orderHash, chain: "gunzilla" as const, contractAddress: CONTRACT, tokenId, collectionSlug: "off-the-grid" as const, protocolAddress: PROTOCOL });
-const scope = (tokenId = "7"): GenerationWindowScope => createGenerationWindowScope([identity(tokenId)]);
+const scope = (tokenId = "7"): GenerationWindowScope => createGenerationWindowScopeFromInitialProjection({ localOrders: [{ orderHash: HASH(900), identity: identity(tokenId), status: "active", isActive: true, needsReconciliation: false, lastOrderEventTimestamp: null, lastOrderEventVersion: null, createdAt: null, updatedAt: null }], protocolAddress: PROTOCOL, candidateBundle: candidate(tokenId) } as any);
 const row = (id: number, event_type: string, processing_status: string, overrides: Record<string, unknown> = {}) => ({ event_id: String(id), received_at: "2026-09-14T00:00:00.000Z", event_type, processing_status, order_hash: HASH(id), chain: "gunzilla", contract_address: CONTRACT, token_id: "7", ...overrides });
+const seller = "0x2222222222222222222222222222222222222222";
+function activeListing(index: number): any { const token = String(index); return { order_hash: HASH(index), chain: "gunzilla", protocol_address: PROTOCOL, asset: { identifier: token, contract: ACTIVE_LISTINGS_CONTRACT }, remaining_quantity: 1, protocol_data: { parameters: { offerer: seller, offer: [{ itemType: 2, token: ACTIVE_LISTINGS_CONTRACT, identifierOrCriteria: token, startAmount: "1", endAmount: "1" }], consideration: [{ itemType: 0, token: "0x" + "0".repeat(40), identifierOrCriteria: "0", startAmount: "1", endAmount: "1", recipient: seller }], startTime: "1787323440", endTime: "1789915440", orderType: 0 }, signature: null }, price: { current: { currency: "GUN", decimals: 18, value: "1" } }, order_created_at: 1787323444, type: "basic", status: "ACTIVE" }; }
+async function realProjection(): Promise<any> { const client = new ActiveListingsClient({ apiKey: "fixture", dependencies: { fetch: async () => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ listings: [activeListing(7), activeListing(8)], next: null }) }) as any, sleep: async () => undefined }, policy: { maxPages: 1, maxListings: 100 }, retryPolicy: { maxRetries: 0 } }); const snapshot = await client.fetchSnapshot("2026-09-14T00:00:00.000Z", { fixture: "a".repeat(64) }); return projectInitialGenerationBaseline({ sourceProvenance: { fixture: "a".repeat(64) }, snapshot }, { sourceEvidencePath: "fixture", sweepId: "123e4567-e89b-12d3-a456-426614174000" }); }
 
 class FakeClient implements TransactionClient {
   constructor(private readonly db: FakePool, private readonly index: number) {}
@@ -42,22 +48,24 @@ class FakePool implements DbPool {
   async query<T = unknown>(): Promise<QueryResult<T>> { return { rows: [], rowCount: 0 }; }
   async end(): Promise<void> {}
 }
-function candidate(): any {
-  const local: OfflineLocalOrder = { orderHash: HASH(900), identity: identity(), status: "active", isActive: true, needsReconciliation: false, lastOrderEventTimestamp: null, lastOrderEventVersion: null, createdAt: null, updatedAt: null };
+function candidate(tokenId = "7"): any {
+  const local: OfflineLocalOrder = { orderHash: HASH(900), identity: identity(tokenId), status: "active", isActive: true, needsReconciliation: false, lastOrderEventTimestamp: null, lastOrderEventVersion: null, createdAt: null, updatedAt: null };
   const manifest: OfflineSweepManifest = { sweepId: "sweep", generationState: "TRANSPORT_COMPLETE", transportResult: "COMPLETE", snapshotStartedAt: "2026-09-14T00:00:00.000Z", snapshotCompletedAt: "2026-09-14T00:01:00.000Z", paginationExhausted: true, nextCursor: null, truncatedByPageLimit: false, truncatedByListingLimit: false, malformedCount: 0, unsupportedCount: 0, conflictCount: 0, cursorCycleDetected: false, repeatedPageDetected: false, sourceProvenance: { fixture: "a".repeat(64) } };
   return classifyOfflineCandidates({ manifest, localOrders: [local], seenOrders: [{ sweepId: "sweep", orderHash: HASH(900), pageNumber: 1, rawPageHash: "b".repeat(64), normalizedMaterialHash: "c".repeat(64) }], journalEvents: [] });
 }
 
-test("scope is canonical, immutable, fingerprinted, and rejects arbitrary key inputs", () => {
-  const a = scope(); const b = createGenerationWindowScope([identity("7", HASH(900))]);
+test("scope is projection-bound, immutable, fingerprinted, and rejects arbitrary key inputs", () => {
+  const a = scope(); const b = scope();
   assert.equal(a.scopeFingerprint, b.scopeFingerprint);
   assert.equal("nftKeys" in (a as object), false);
   assert.equal("orderHashes" in (a as object), false);
+  assert.equal("createGenerationWindowScope" in generationWindowReaderModule, false);
   assert.equal(Object.isFrozen(a), true);
   assert.equal(Object.isFrozen(a.identities), true);
-  assert.notEqual(a.scopeFingerprint, createGenerationWindowScope([identity("8")]).scopeFingerprint);
-  for (const input of [[], [identity("7", HASH(900)), identity("7", HASH(900))], [{ ...identity(), protocolAddress: PROTOCOL.toUpperCase() }], [{ ...identity(), contractAddress: "0x" + "a".repeat(40) }], [{ ...identity(), protocolAddress: "0x" + "2".repeat(40) }, identity()]]) assert.throws(() => createGenerationWindowScope(input as any));
+  assert.notEqual(a.scopeFingerprint, scope("8").scopeFingerprint);
+  assert.throws(() => (createGenerationWindowScopeFromInitialProjection as unknown as (value: unknown) => unknown)([]));
 });
+test("real initial projection binds both NFTs and matching transfer", async () => { const projection = await realProjection(); const bound = createGenerationWindowScopeFromInitialProjection(projection); assert.equal(bound.identities.length, 2); const transfer = row(1, "item_transferred", "reconciliation_required", { token_id: "8" }); const pool = new FakePool([transfer], [0, 1]); const reader = new PostgresGenerationJournalWindowReader(pool); const start = await reader.captureStart(); const observed = await reader.observe(start, bound); assert.equal(observed.round.reconciliationRequiredCount, 1); assert.equal(observed.scopeFingerprint, bound.scopeFingerprint); });
 
 test("zero journal has deterministic zero watermark", async () => {
   const pool = new FakePool([], [0, 0]);

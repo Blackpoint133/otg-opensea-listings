@@ -4,6 +4,8 @@ import { ADDRESS_PATTERN, SUPPORTED_CHAIN, SUPPORTED_CONTRACT_ADDRESS, validateC
 import type { OfflineCatchUpRound, OfflineLocalAdmissionWatermark } from "./offlineGenerationBarrierModel.js";
 import { isCanonicalAddress, isCanonicalOrderHash, isDecimal, isIso } from "./verifier/targetedVerifierPolicy.js";
 import { deepFreeze, sha256Canonical } from "./evidence/canonicalEvidence.js";
+import { validateOfflineCandidateBundle, type OfflineCandidateBundle } from "./offlineCandidateModel.js";
+import type { InitialGenerationBaselineProjection } from "./initialGenerationBaseline.js";
 
 const SCOPE_SCHEMA = "generation-window-scope-v1" as const;
 const statuses = new Set(["pending", "processing", "applied", "reconciliation_required", "failed", "ignored_duplicate", "ignored_older"]);
@@ -34,8 +36,7 @@ function validateStart(start: GenerationWindowStart): OfflineLocalAdmissionWater
 function nftKey(chain: string, contract: string, tokenId: string): string { return `${chain}\u0000${contract}\u0000${tokenId}`; }
 function scopeKey(identity: CanonicalLocalIdentity): string { return nftKey(identity.chain, identity.contractAddress, identity.tokenId); }
 
-/** Construct an immutable journal scope from canonical projection identities. */
-export function createGenerationWindowScope(input: readonly CanonicalLocalIdentity[]): GenerationWindowScope {
+function createScopeFromIdentities(input: readonly CanonicalLocalIdentity[]): GenerationWindowScope {
   if (!Array.isArray(input) || input.length === 0) throw new Error("GENERATION_WINDOW_SCOPE_EMPTY");
   const identities = input.map((value) => {
     if (validateCanonicalIdentity(value) !== "VALID") throw new Error("GENERATION_WINDOW_SCOPE_INVALID_IDENTITY");
@@ -54,9 +55,32 @@ export function createGenerationWindowScope(input: readonly CanonicalLocalIdenti
   const scopeFingerprint = sha256Canonical({ schema: SCOPE_SCHEMA, identities: owned.map((identity) => ({ orderHash: identity.orderHash, chain: identity.chain, contractAddress: identity.contractAddress, tokenId: identity.tokenId, collectionSlug: identity.collectionSlug, protocolAddress: identity.protocolAddress })) });
   return deepFreeze({ identities: owned, scopeFingerprint });
 }
+/** Construct the journal scope only from a complete, accepted initial projection. */
+export function createGenerationWindowScopeFromInitialProjection(projection: InitialGenerationBaselineProjection): GenerationWindowScope {
+  if (projection === null || typeof projection !== "object" || !Array.isArray(projection.localOrders) || projection.candidateBundle === null || typeof projection.candidateBundle !== "object") throw new Error("GENERATION_WINDOW_SCOPE_PROJECTION_INVALID");
+  const candidateBundle = projection.candidateBundle as OfflineCandidateBundle;
+  if (!validateOfflineCandidateBundle(candidateBundle).valid) throw new Error("GENERATION_WINDOW_SCOPE_CANDIDATE_INVALID");
+  if (candidateBundle.orders.length !== projection.localOrders.length || candidateBundle.counts.present !== projection.localOrders.length || candidateBundle.counts.absentCandidate !== 0 || candidateBundle.counts.blocked !== 0) throw new Error("GENERATION_WINDOW_SCOPE_PROJECTION_MISMATCH");
+  const candidates = new Map<string, typeof candidateBundle.orders[number]>();
+  for (const candidate of candidateBundle.orders) {
+    if (candidates.has(candidate.orderHash)) throw new Error("GENERATION_WINDOW_SCOPE_PROJECTION_MISMATCH");
+    candidates.set(candidate.orderHash, candidate);
+  }
+  const identities: CanonicalLocalIdentity[] = [];
+  for (const local of projection.localOrders) {
+    if (validateCanonicalIdentity(local.identity) !== "VALID" || local.orderHash !== local.identity.orderHash) throw new Error("GENERATION_WINDOW_SCOPE_PROJECTION_MISMATCH");
+    const candidate = candidates.get(local.orderHash);
+    if (!candidate || candidate.classification !== "PRESENT" || candidate.seenInSweep !== true || candidate.authorityGranted !== false || candidate.reasons.length !== 0 || validateCanonicalIdentity(candidate.identity) !== "VALID") throw new Error("GENERATION_WINDOW_SCOPE_PROJECTION_MISMATCH");
+    const candidateIdentity = candidate.identity;
+    if (candidate.orderHash !== local.orderHash || candidateIdentity.orderHash !== local.identity.orderHash || candidateIdentity.chain !== local.identity.chain || candidateIdentity.contractAddress !== local.identity.contractAddress || candidateIdentity.tokenId !== local.identity.tokenId || candidateIdentity.collectionSlug !== local.identity.collectionSlug || candidateIdentity.protocolAddress !== local.identity.protocolAddress) throw new Error("GENERATION_WINDOW_SCOPE_PROJECTION_MISMATCH");
+    identities.push(local.identity);
+  }
+  if (candidates.size !== identities.length || typeof projection.protocolAddress !== "string" || identities.some((identity) => identity.protocolAddress !== projection.protocolAddress)) throw new Error("GENERATION_WINDOW_SCOPE_PROTOCOL_MISMATCH");
+  return createScopeFromIdentities(identities);
+}
 function scopeSets(scope: GenerationWindowScope): { orderHashes: ReadonlySet<string>; nftKeys: ReadonlySet<string> } {
   if (scope === null || typeof scope !== "object" || !Array.isArray(scope.identities) || scope.identities.length === 0) throw new Error("GENERATION_WINDOW_SCOPE_EMPTY");
-  const checked = createGenerationWindowScope(scope.identities);
+  const checked = createScopeFromIdentities(scope.identities);
   if (scope.scopeFingerprint !== checked.scopeFingerprint) throw new Error("GENERATION_WINDOW_SCOPE_FINGERPRINT_MISMATCH");
   return { orderHashes: new Set(checked.identities.map((identity) => identity.orderHash)), nftKeys: new Set(checked.identities.map(scopeKey)) };
 }

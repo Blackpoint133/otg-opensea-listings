@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRecoveryEntryAnchor, isTrustedRecoveryEntryAnchor } from "../src/reconciliation/continuityLossRebaseline.js";
+import fs from "node:fs";
+import path from "node:path";
+import { createRecoveryEntryAnchor, isTrustedRecoveryEntryAnchor, continuityRebaselineInsertContract } from "../src/reconciliation/continuityLossRebaseline.js";
 import { parseContinuityLossRebaselineArgs } from "../src/cli/runContinuityLossRebaseline.js";
 import { runContinuityLossRebaseline } from "../src/runtime/continuityLossRebaselineRuntime.js";
 
@@ -30,6 +32,36 @@ for (const [field, code] of [["activeListingCount", "CONTINUITY_LOSS_RECOVERY_AC
 
 test("specialized REST pending rows do not invalidate anchor", () => {
   assert.doesNotThrow(() => createRecoveryEntryAnchor(base));
+});
+
+test("continuity rebaseline INSERT contract is cardinality-safe and preserves JSON null", () => {
+  const contract = continuityRebaselineInsertContract();
+  assert.equal(contract.targetColumnCount, 33);
+  assert.equal(contract.expressionCount, 33);
+  assert.deepEqual(contract.parameterPositions, { source: 15, adoptedAt: 16, rawLastEvent: 17, protocolAddress: 18, adoptionId: 19, rawBaselineListing: 20 });
+});
+
+test("superseded sweep is mandatory and recovery-entry high-water is independently bound", () => {
+  assert.throws(() => createRecoveryEntryAnchor({ ...base, supersededSweepId: "" } as any), /CONTINUITY_LOSS_RECOVERY_ANCHOR_INVALID/);
+  assert.equal(base.journalHighWater.eventId, "1758");
+});
+
+test("replay source is fenced at recovery entry and requires business time", () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), "src/reconciliation/continuityLossRebaseline.ts"), "utf8");
+  assert.match(source, /event_id > \$1::bigint ORDER BY event_id ASC/);
+  assert.match(source, /plan\.recoveryEntryJournalEventId/);
+  assert.match(source, /CONTINUITY_LOSS_REBASELINE_EVENT_TIME_UNPROVEN/);
+  assert.doesNotMatch(source, /\[plan\.stableWatermark\.eventId\]/);
+});
+
+test("production CLI has direct wiring and no required execute callback", () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), "src/cli/runContinuityLossRebaseline.ts"), "utf8");
+  assert.match(source, /loadCanonicalProductionOpenSeaApiKey/);
+  assert.match(source, /loadDatabaseConfig/);
+  assert.match(source, /new ProductionIngestionRuntime/);
+  assert.match(source, /runContinuityLossGeneration/);
+  assert.match(source, /waitForTermination/);
+  assert.match(source, /pathToFileURL/);
 });
 
 test("continuity-loss CLI requires explicit superseded identity and confirmations", () => {

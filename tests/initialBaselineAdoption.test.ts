@@ -13,6 +13,8 @@ import { createGenerationPublicationEvidence } from "../src/reconciliation/gener
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { sha256Canonical } from "../src/reconciliation/evidence/canonicalEvidence.js";
+import { runPublishedInitialBaselineAdoptionRecovery } from "../src/runtime/publishedInitialBaselineAdoptionRecovery.js";
+import { parsePublishedRecoveryArgs } from "../src/cli/runPublishedInitialBaselineAdoptionRecovery.js";
 
 function rawListing(token = "7", hashChar = "1"): any { return { order_hash: `0x${hashChar.repeat(64)}`, chain: "gunzilla", protocol_address: `0x${"a".repeat(40)}`, asset: { identifier: token, contract: ACTIVE_LISTINGS_CONTRACT }, remaining_quantity: 1, protocol_data: { parameters: { offerer: `0x${"2".repeat(40)}`, offer: [{ itemType: 2, token: ACTIVE_LISTINGS_CONTRACT, identifierOrCriteria: token, startAmount: "1", endAmount: "1" }], consideration: [{ itemType: 0, token: `0x${"0".repeat(40)}`, identifierOrCriteria: "0", startAmount: "1000000000000000000", endAmount: "1000000000000000000", recipient: `0x${"2".repeat(40)}` }], startTime: "1787323440", endTime: "1789915440", orderType: 0 } }, price: { current: { currency: "GUN", decimals: 18, value: "1000000000000000000" } }, order_created_at: 1787323444, type: "basic", status: "ACTIVE" }; }
 
@@ -133,15 +135,15 @@ test("adoption store covers the complete order lifecycle and transfer matrix", a
     const client = new AdoptionFakeClient(fixture.publication);
     client.now = new Date(Date.parse(fixture.plan.snapshotCompletedAt) + 1000).toISOString();
     client.after = [{ event_id: "1", event_type, processing_status: ["applied", "ignored_duplicate", "ignored_older"][i % 3], chain: "gunzilla", contract_address: ACTIVE_LISTINGS_CONTRACT, order_hash: fixture.plan.rows[0].orderHash, token_id: null }];
-    await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(client) as any).adopt(fixture.plan), /INITIAL_BASELINE_POST_STABLE_EVENT/);
-    assert.ok(client.sql.includes("ROLLBACK"));
+    if (client.after[0].processing_status === "applied") { await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(client) as any).adopt(fixture.plan), /INITIAL_BASELINE_REPLAY_NORMALIZATION_FAILED/); assert.ok(client.sql.includes("ROLLBACK")); }
+    else { assert.equal((await new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(client) as any).adopt(fixture.plan)).outcome, "ADOPTED"); assert.ok(client.sql.includes("COMMIT")); }
     await rm(fixture.root, { recursive: true, force: true });
   }
   const malformed = await trustedFixture();
   const bad = new AdoptionFakeClient(malformed.publication); bad.now = new Date(Date.parse(malformed.plan.snapshotCompletedAt) + 1000).toISOString();
   bad.after = [{ event_id: "1", event_type: "item_listed", processing_status: "applied", chain: "gunzilla", contract_address: ACTIVE_LISTINGS_CONTRACT, order_hash: "0x" + "z".repeat(64), token_id: null }];
   await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(bad) as any).adopt(malformed.plan), /MALFORMED/); await rm(malformed.root, { recursive: true, force: true });
-  const matching = await trustedFixture(); const transfer = new AdoptionFakeClient(matching.publication); transfer.now = new Date(Date.parse(matching.plan.snapshotCompletedAt) + 1000).toISOString(); transfer.after = [{ event_id: "1", event_type: "item_transferred", processing_status: "applied", chain: "gunzilla", contract_address: ACTIVE_LISTINGS_CONTRACT, token_id: matching.plan.rows[0].tokenId, order_hash: null }]; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(transfer) as any).adopt(matching.plan), /POST_STABLE_EVENT/); await rm(matching.root, { recursive: true, force: true });
+  const matching = await trustedFixture(); const transfer = new AdoptionFakeClient(matching.publication); transfer.now = new Date(Date.parse(matching.plan.snapshotCompletedAt) + 1000).toISOString(); transfer.after = [{ event_id: "1", event_type: "item_transferred", processing_status: "applied", chain: "gunzilla", contract_address: ACTIVE_LISTINGS_CONTRACT, token_id: matching.plan.rows[0].tokenId, order_hash: null }]; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(transfer) as any).adopt(matching.plan), /INITIAL_BASELINE_REPLAY_NORMALIZATION_FAILED/); await rm(matching.root, { recursive: true, force: true });
   const nonmatching = await trustedFixture(); const outside = new AdoptionFakeClient(nonmatching.publication); outside.now = new Date(Date.parse(nonmatching.plan.snapshotCompletedAt) + 1000).toISOString(); outside.after = [{ event_id: "1", event_type: "item_transferred", processing_status: "applied", chain: "gunzilla", contract_address: ACTIVE_LISTINGS_CONTRACT, token_id: "999", order_hash: null }]; const ok = await new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(outside) as any).adopt(nonmatching.plan); assert.equal(ok.outcome, "ADOPTED"); await rm(nonmatching.root, { recursive: true, force: true });
   const differentChain = await trustedFixture(); const dc = new AdoptionFakeClient(differentChain.publication); dc.now = new Date(Date.parse(differentChain.plan.snapshotCompletedAt) + 1000).toISOString(); dc.after = [{ event_id: "1", event_type: "item_transferred", processing_status: "applied", chain: "ethereum", contract_address: ACTIVE_LISTINGS_CONTRACT, token_id: "7", order_hash: null }]; assert.equal((await new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(dc) as any).adopt(differentChain.plan)).outcome, "ADOPTED"); await rm(differentChain.root, { recursive: true, force: true });
   const differentContract = await trustedFixture(); const dct = new AdoptionFakeClient(differentContract.publication); dct.now = new Date(Date.parse(differentContract.plan.snapshotCompletedAt) + 1000).toISOString(); dct.after = [{ event_id: "1", event_type: "item_transferred", processing_status: "applied", chain: "gunzilla", contract_address: "0x" + "f".repeat(40), token_id: "7", order_hash: null }]; assert.equal((await new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(dct) as any).adopt(differentContract.plan)).outcome, "ADOPTED"); await rm(differentContract.root, { recursive: true, force: true });
@@ -153,9 +155,9 @@ test("publication, local-state, expiration, and atomic failure controls are exec
   const newer = new AdoptionFakeClient(fixture.publication); const newerPublication = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:03:00.000Z" }, 2); newer.publicationRows = [publicationRow(newerPublication)]; newer.now = new Date(Date.parse(fixture.plan.snapshotCompletedAt) + 1000).toISOString(); await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(newer) as any).adopt(fixture.plan), /PUBLICATION_NOT_CURRENT/); assert.ok(newer.sql.includes("ROLLBACK"));
   const conflict = new AdoptionFakeClient(fixture.publication); const p2 = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:03:00.000Z" }, 2); const p3 = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:04:00.000Z" }, 2); conflict.publicationRows = [publicationRow(p2), publicationRow(p3)]; conflict.now = newer.now; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(conflict) as any).adopt(fixture.plan), /PUBLICATION_NOT_CURRENT/);
   const none = new AdoptionFakeClient(fixture.publication); none.publicationRows = []; none.now = newer.now; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(none) as any).adopt(fixture.plan), /PUBLICATION_NOT_CURRENT/);
-  const local = new AdoptionFakeClient(fixture.publication); local.localCount = 1; local.now = newer.now; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(local) as any).adopt(fixture.plan), /LOCAL_STATE_NOT_EMPTY/);
+  const local = new AdoptionFakeClient(fixture.publication); local.localCount = 1; local.now = newer.now; const merged = await new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(local) as any).adopt(fixture.plan); assert.equal(merged.outcome, "ADOPTED"); assert.equal(local.localCount, 1);
   const expired = new AdoptionFakeClient(fixture.publication); expired.now = fixture.plan.rows[0].expirationAt; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(expired) as any).adopt(fixture.plan), /SNAPSHOT_EXPIRED/);
-  for (const mode of ["receipt", "listing", "count"] as const) { const c = new AdoptionFakeClient(fixture.publication); c.now = newer.now; if (mode === "receipt") c.failReceiptInsert = true; if (mode === "listing") c.failListingInsert = true; if (mode === "count") c.finalLinkedCountOverride = "0"; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(c) as any).adopt(fixture.plan)); assert.ok(c.sql.includes("ROLLBACK")); assert.equal(c.sql.includes("COMMIT"), false); }
+  for (const mode of ["receipt", "listing", "count"] as const) { const c = new AdoptionFakeClient(fixture.publication); c.now = newer.now; if (mode === "receipt") c.failReceiptInsert = true; if (mode === "listing") c.failListingInsert = true; if (mode === "count") c.linkedRows = []; await assert.rejects(() => new PostgresInitialBaselineAdoptionStore(new AdoptionFakePool(c) as any).adopt(fixture.plan)); assert.ok(c.sql.includes("ROLLBACK")); assert.equal(c.sql.includes("COMMIT"), false); }
   await rm(fixture.root, { recursive: true, force: true });
 });
 
@@ -192,4 +194,41 @@ test("linked baseline omission and addition are durable corruption", async () =>
     if (mode === "missing") client.linkedRows = []; else client.linkedRows = [...client.linked, { ...client.linked[0], order_hash: "0x" + "f".repeat(64) }];
     await assert.rejects(() => store.adopt(fixture.plan), /DURABLE_CORRUPTION/); assert.ok(client.sql.includes("ROLLBACK")); await rm(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("published-baseline recovery is explicitly bound, evidence-backed, and performs no sweep", async () => {
+  const fixture = await trustedFixture();
+  const lease = { pid: "42", backendStart: "2026-09-02T00:00:00.000Z", applicationName: "opensea_listings_v2_production_ingestion", database: "server_otg" } as const;
+  const queries: string[] = [];
+  const pool: any = {
+    async query(text: string) {
+      queries.push(text);
+      if (text.includes("targeted_verifier_generation_publications WHERE generation_publication_id")) return { rows: [publicationRow(fixture.publication)] };
+      if (text.includes("targeted_verifier_generation_publications WHERE publication_state='ACCEPTED'")) return { rows: [publicationRow(fixture.publication)] };
+      if (text.includes("initial_baseline_adoptions WHERE generation_publication_id")) return { rows: [] };
+      if (text.includes("initial_baseline_adoptions WHERE adoption_id")) return { rows: [{ generation_publication_id: fixture.publication.generationPublicationId, sweep_id: fixture.publication.sweepId, expected_order_count: fixture.plan.expectedOrderCount, adopted_order_count: fixture.plan.expectedOrderCount }] };
+      if (text.includes("initial_baseline_adoption_id=$1")) return { rows: fixture.plan.rows.map((row: any) => ({ order_hash: row.orderHash, protocol_address: row.protocolAddress, initial_baseline_adoption_id: fixture.plan.adoptionId, raw_baseline_listing: row.rawBaselineListing })) };
+      throw new Error(`unexpected query: ${text}`);
+    }
+  };
+  let adopted = 0;
+  const result = await runPublishedInitialBaselineAdoptionRecovery({
+    pool,
+    publicationId: fixture.publication.generationPublicationId,
+    sweepId: fixture.publication.sweepId,
+    evidenceRoot: fixture.root,
+    leaseProbe: async () => lease,
+    project: () => fixture.projection,
+    reconstruct: async () => fixture.integrated,
+    adoptionStore: { adopt: async (plan: any) => { adopted += 1; assert.equal(plan.adoptionId, fixture.plan.adoptionId); return { outcome: "ADOPTED", adoptionId: plan.adoptionId, adoptedOrderCount: plan.expectedOrderCount }; } },
+    postAdoptionVerifier: async () => true
+  });
+  assert.equal(result.status, "VERIFIED_ADOPTED");
+  assert.equal(adopted, 1);
+  assert.equal(queries.some((query) => /active.?listings|opensea.*events/i.test(query)), false);
+  assert.deepEqual(parsePublishedRecoveryArgs([
+    "--confirm-production-published-baseline-recovery", "--confirm-no-new-sweep", "--confirm-existing-publication", "--confirm-external-ingestion-running", "--confirm-no-deactivation-authority",
+    "--publication-id", fixture.publication.generationPublicationId, "--sweep-id", fixture.publication.sweepId, "--evidence-root", fixture.root
+  ]), { publicationId: fixture.publication.generationPublicationId, sweepId: fixture.publication.sweepId, evidenceRoot: fixture.root });
+  await rm(fixture.root, { recursive: true, force: true });
 });

@@ -19,7 +19,8 @@ export interface PendingInboxApplyOptions {
   beforeStateApplication?: (row: { eventId: string; eventType: string; dedupeKey: string; attemptCount: number }) => void | Promise<void>;
 }
 
-function normalizeStoredRawEvent(rawPayload: unknown, receivedAt: string): NormalizedOrderEvent | NormalizedTransferEvent | null {
+/** Normalize an immutable journal payload using the same production path used by the durable worker. */
+export function normalizeStoredRawEvent(rawPayload: unknown, receivedAt: string): NormalizedOrderEvent | NormalizedTransferEvent | null {
   const raw = typeof rawPayload === "string" ? JSON.parse(rawPayload) : rawPayload;
   const eventType = (raw as { event_type?: unknown } | null)?.event_type;
   if (eventType === "item_transferred") return normalizeTransferEvent(raw, receivedAt);

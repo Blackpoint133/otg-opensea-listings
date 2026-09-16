@@ -32,6 +32,10 @@ export function assertProductionProfile(profile: string | undefined): void {
 export interface ProductionStreamClient {
   onEvents(collection: string, events: readonly string[], callback: (event: unknown) => void): () => void;
   disconnect(callback?: () => void): void;
+  /** Production adapters resolve only after socket OPEN and channel JOINED. */
+  waitUntilReady?(timeoutMs?: number): Promise<void>;
+  /** Marks SDK leave/close callbacks as expected operator shutdown. */
+  beginExpectedShutdown?(): void;
 }
 
 export interface ProductionIngestionCounters {
@@ -76,6 +80,7 @@ export interface ProductionIngestionOptions extends ProductionIngestionDependenc
   ingressCapacity?: number;
   workerPollMs?: number;
   streamDisconnectTimeoutMs?: number;
+  streamReadyTimeoutMs?: number;
 }
 
 export interface ProductionControllerTestHooks {
@@ -106,6 +111,7 @@ export function createProductionInboxController(pool: DbPool, hooks: ProductionC
 }
 
 const MAX_RUNTIME_DIAGNOSTIC = 2_000;
+export const DEFAULT_PRODUCTION_STREAM_READY_TIMEOUT_MS = 15_000;
 
 /** Formats SDK/runtime failures without exposing raw payloads or secrets. */
 export function formatProductionRuntimeDiagnostic(error: unknown): string {
@@ -135,9 +141,108 @@ export function productionDatabasePreflight(pool: DbPool): Promise<void> {
   })();
 }
 
+interface ProductionSdkSocketLike {
+  onOpen(callback: () => void): unknown;
+  onClose(callback: (event?: unknown) => void): unknown;
+  onError(callback: (error: unknown) => void): unknown;
+}
+
+interface ProductionSdkChannelLike {
+  joinPush?: { receive(status: string, callback: (response?: unknown) => void): unknown };
+  onError?(callback: (reason?: unknown) => void): unknown;
+  onClose?(callback: (reason?: unknown) => void): unknown;
+}
+
+interface ProductionSdkClientLike {
+  readonly socket?: ProductionSdkSocketLike;
+  onEvents(collection: string, events: readonly string[], callback: (event: unknown) => void): () => void;
+  disconnect(callback?: () => void): void;
+  getChannel?(topic: string, events?: readonly string[]): ProductionSdkChannelLike | undefined;
+}
+
+/**
+ * Adapts the pinned stream-js/Phoenix object to a one-epoch production
+ * contract. Private SDK fields are deliberately validated at this boundary;
+ * an uninstrumentable client is never treated as ready.
+ */
+export function createProductionStreamAdapter(client: unknown, onFailure: (error: unknown) => void): ProductionStreamClient {
+  const sdk = client as Partial<ProductionSdkClientLike> | null;
+  const socket = sdk?.socket;
+  if (!sdk || !socket || typeof sdk.onEvents !== "function" || typeof sdk.disconnect !== "function" || typeof socket.onOpen !== "function" || typeof socket.onClose !== "function" || typeof socket.onError !== "function" || typeof sdk.getChannel !== "function") {
+    throw new Error("STREAM_LIFECYCLE_INSTRUMENTATION_UNAVAILABLE");
+  }
+
+  let expectedShutdown = false;
+  let failed = false;
+  let socketOpened = false;
+  let channelJoined = false;
+  let ready = false;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: unknown) => void;
+  const readyPromise = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+
+  const fail = (error: unknown): void => {
+    if (expectedShutdown || failed) return;
+    failed = true;
+    rejectReady(error);
+    onFailure(error);
+  };
+  const maybeReady = (): void => {
+    if (!failed && socketOpened && channelJoined && !ready) {
+      ready = true;
+      resolveReady();
+    }
+  };
+
+  socket.onOpen(() => {
+    if (socketOpened) {
+      fail({ code: "STREAM_CONTINUITY_LOST", reason: "second transport epoch opened" });
+      return;
+    }
+    socketOpened = true;
+    maybeReady();
+  });
+  socket.onClose((event) => {
+    if (expectedShutdown) return;
+    fail({ code: "STREAM_CONTINUITY_LOST", reason: "unexpected socket close", close: event ?? null });
+  });
+  socket.onError((error) => { if (!expectedShutdown) fail(error); });
+
+  let channel: ProductionSdkChannelLike | undefined;
+  let subscribed = false;
+  const attachChannelLifecycle = (candidate: ProductionSdkChannelLike | undefined): void => {
+    if (!candidate || subscribed) return;
+    if (!candidate.joinPush || typeof candidate.joinPush.receive !== "function" || typeof candidate.onError !== "function" || typeof candidate.onClose !== "function") throw new Error("STREAM_LIFECYCLE_INSTRUMENTATION_UNAVAILABLE");
+    channel = candidate;
+    subscribed = true;
+    candidate.joinPush.receive("ok", () => { channelJoined = true; maybeReady(); });
+    candidate.joinPush.receive("error", (reason) => fail({ code: "STREAM_CHANNEL_JOIN_ERROR", reason: reason ?? null }));
+    candidate.joinPush.receive("timeout", (reason) => fail({ code: "STREAM_CHANNEL_JOIN_TIMEOUT", reason: reason ?? null }));
+    candidate.onError((reason) => fail({ code: "STREAM_CHANNEL_ERROR", reason: reason ?? null }));
+    candidate.onClose((reason) => fail({ code: "STREAM_CHANNEL_CLOSE", reason: reason ?? null }));
+  };
+
+  return {
+    onEvents(collection, events, callback) {
+      const unsubscribe = sdk.onEvents!(collection, events, callback);
+      attachChannelLifecycle(sdk.getChannel!( `collection:${collection}`, events));
+      if (!channel) throw new Error("STREAM_LIFECYCLE_INSTRUMENTATION_UNAVAILABLE");
+      return unsubscribe;
+    },
+    waitUntilReady(timeoutMs = DEFAULT_PRODUCTION_STREAM_READY_TIMEOUT_MS) {
+      if (ready) return Promise.resolve();
+      const bounded = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_PRODUCTION_STREAM_READY_TIMEOUT_MS;
+      const timeout = setTimeout(() => fail({ code: "STREAM_READINESS_TIMEOUT", timeoutMs: bounded }), bounded);
+      return readyPromise.finally(() => clearTimeout(timeout));
+    },
+    beginExpectedShutdown() { expectedShutdown = true; },
+    disconnect(callback) { expectedShutdown = true; sdk.disconnect!(callback); }
+  };
+}
+
 function defaultStream(apiKey: string, onError: (error: unknown) => void): ProductionStreamClient {
   const storage = new LocalStorage("runtime/production_ingestion_local_storage");
-  return createStreamClient(apiKey, storage, onError, LogLevel.INFO) as unknown as ProductionStreamClient;
+  return createProductionStreamAdapter(createStreamClient(apiKey, storage, onError, LogLevel.INFO), onError);
 }
 
 function emptyCounters(): ProductionIngestionCounters {
@@ -167,6 +272,7 @@ export class ProductionIngestionRuntime {
   private terminationReason: ProductionTerminationReason | null = null;
   private terminationFatal = false;
   private fatalDiagnostic: string | null = null;
+  private streamReady = false;
   private readonly log: (message: string) => void;
 
   constructor(private readonly options: ProductionIngestionOptions) {
@@ -182,6 +288,7 @@ export class ProductionIngestionRuntime {
     this.terminationReason = reason;
     this.terminationFatal = true;
     this.stopping = true;
+    this.streamReady = false;
     if (error !== undefined) {
       const diagnostic = formatProductionRuntimeDiagnostic(error);
       if (this.fatalDiagnostic === null) this.fatalDiagnostic = diagnostic;
@@ -211,6 +318,8 @@ export class ProductionIngestionRuntime {
         this.failClosed("STREAM_ERROR", error);
       });
       this.unsubscribe = this.stream.onEvents(PRODUCTION_COLLECTION, [...PRODUCTION_EVENT_TYPES], (event) => this.acceptEvent(event));
+      if (this.stream.waitUntilReady) await this.stream.waitUntilReady(this.options.streamReadyTimeoutMs ?? DEFAULT_PRODUCTION_STREAM_READY_TIMEOUT_MS);
+      this.streamReady = true;
       if (this.terminationFatal) throw new Error("STREAM_ERROR_DURING_STARTUP");
       this.startWorkerPump();
       if (this.options.externalStopSignal) {
@@ -224,7 +333,7 @@ export class ProductionIngestionRuntime {
   }
 
   private acceptEvent(event: unknown): void {
-    if (this.stopping) return;
+    if (this.stopping || !this.streamReady) return;
     this.counters.streamEventsObserved += 1;
     this.counters.lastStreamEventAt = this.options.now?.() ?? new Date().toISOString();
     const capacity = this.options.ingressCapacity ?? DEFAULT_PRODUCTION_INGRESS_CAPACITY;
@@ -318,6 +427,8 @@ export class ProductionIngestionRuntime {
       if (this.stopped) return;
       if (this.terminationReason === null) this.terminationReason = "OPERATOR_STOP";
       this.stopping = true;
+      this.streamReady = false;
+      this.stream?.beginExpectedShutdown?.();
       try { this.unsubscribe?.(); } catch (error) { this.log(`unsubscribe_error:${formatProductionRuntimeDiagnostic(error)}`); }
       this.unsubscribe = null;
       if (this.stream) {

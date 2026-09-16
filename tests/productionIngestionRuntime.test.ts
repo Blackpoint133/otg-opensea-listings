@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { eventTypesForProfile } from "../src/eventTypes.js";
-import { assertProductionProfile, createProductionInboxController, formatProductionRuntimeDiagnostic, PRODUCTION_EVENT_TYPES, ProductionIngestionRuntime, productionDatabasePreflight } from "../src/runtime/productionIngestionRuntime.js";
+import { assertProductionProfile, createProductionInboxController, createProductionStreamAdapter, formatProductionRuntimeDiagnostic, PRODUCTION_EVENT_TYPES, ProductionIngestionRuntime, productionDatabasePreflight } from "../src/runtime/productionIngestionRuntime.js";
 import { DEFAULT_DURABLE_INBOX_READINESS_POLICY, evaluateDurableInboxReadiness } from "../src/runtime/durableInboxRuntimeController.js";
 import { redactString, serializeDiagnostic } from "../src/logger.js";
 
@@ -46,6 +46,82 @@ function stream(events: unknown[], log: string[]) {
     error(error: unknown) { errorCallback?.(error); },
     setErrorCallback(cb: (error: unknown) => void) { errorCallback = cb; }
   };
+}
+
+class FakePush {
+  private received: string | null = null;
+  private readonly hooks = new Map<string, Array<(response?: unknown) => void>>();
+  receive(status: string, callback: (response?: unknown) => void): this {
+    if (this.received === status) callback();
+    const callbacks = this.hooks.get(status) ?? [];
+    callbacks.push(callback);
+    this.hooks.set(status, callbacks);
+    return this;
+  }
+  emit(status: string, response?: unknown): void {
+    this.received = status;
+    for (const callback of this.hooks.get(status) ?? []) callback(response);
+  }
+}
+
+class FakeLifecycleSocket {
+  private readonly opens: Array<() => void> = [];
+  private readonly closes: Array<(event?: unknown) => void> = [];
+  private readonly errors: Array<(error: unknown) => void> = [];
+  onOpen(callback: () => void): void { this.opens.push(callback); }
+  onClose(callback: (event?: unknown) => void): void { this.closes.push(callback); }
+  onError(callback: (error: unknown) => void): void { this.errors.push(callback); }
+  emitOpen(): void { for (const callback of this.opens) callback(); }
+  emitClose(event: unknown = { code: 1006, reason: "closed", wasClean: false }): void { for (const callback of this.closes) callback(event); }
+  emitError(error: unknown): void { for (const callback of this.errors) callback(error); }
+}
+
+class FakeLifecycleChannel {
+  readonly joinPush = new FakePush();
+  private readonly errors: Array<(reason?: unknown) => void> = [];
+  private readonly closes: Array<(reason?: unknown) => void> = [];
+  onError(callback: (reason?: unknown) => void): void { this.errors.push(callback); }
+  onClose(callback: (reason?: unknown) => void): void { this.closes.push(callback); }
+  emitError(reason?: unknown): void { for (const callback of this.errors) callback(reason); }
+  emitClose(reason?: unknown): void { for (const callback of this.closes) callback(reason); }
+}
+
+class FakeLifecycleSdk {
+  readonly socket = new FakeLifecycleSocket();
+  readonly channel = new FakeLifecycleChannel();
+  eventCallback: ((event: unknown) => void) | null = null;
+  onEvents(collection: string, events: readonly string[], callback: (event: unknown) => void): () => void {
+    assert.equal(collection, "off-the-grid");
+    assert.deepEqual(events, [...eventTypesForProfile("all")]);
+    this.eventCallback = callback;
+    return () => this.channel.emitClose({ reason: "operator leave" });
+  }
+  getChannel(topic: string): FakeLifecycleChannel {
+    assert.equal(topic, "collection:off-the-grid");
+    return this.channel;
+  }
+  disconnect(callback?: () => void): void { this.socket.emitClose({ code: 1000, reason: "operator stop", wasClean: true }); callback?.(); }
+}
+
+function lifecycleRuntime(setup: (sdk: FakeLifecycleSdk) => void = () => {}, externalStopSignal?: AbortSignal) {
+  let sdk: FakeLifecycleSdk | null = null;
+  let persisted = 0;
+  const runtime = new ProductionIngestionRuntime({
+    confirmProductionIngestion: true,
+    apiKey: "test-key",
+    streamReadyTimeoutMs: 30,
+    externalStopSignal,
+    createPool: () => pool(),
+    createController: () => controller([]),
+    createStream: (_key, onError) => {
+      sdk = new FakeLifecycleSdk();
+      setup(sdk);
+      return createProductionStreamAdapter(sdk, onError);
+    },
+    persistEvent: async () => { persisted += 1; return { outcome: "inserted_pending", eventId: String(persisted), dedupeKey: String(persisted), eventType: "item_listed", orderHash: null, nftId: null, processingStatus: "pending", attemptCount: 0 }; },
+    logger: () => {}
+  });
+  return { runtime, get sdk() { return sdk!; }, get persisted() { return persisted; } };
 }
 
 test("production profile is exactly all six accepted event types", () => {
@@ -424,4 +500,81 @@ test("symbol-keyed secrets are omitted while non-secret symbol diagnostics remai
   assert.match(text, /Symbol\(event\)/);
   assert.match(text, /phx_error/);
   assert.doesNotMatch(formatProductionRuntimeDiagnostic(value), /SYMBOL_SECRET_SENTINEL/);
+});
+
+test("production lifecycle adapter readiness waits for socket open and channel join", async () => {
+  const h = lifecycleRuntime();
+  let settled = false;
+  const starting = h.runtime.start().then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(settled, false);
+  h.sdk.socket.emitOpen();
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.equal(settled, false);
+  h.sdk.channel.joinPush.emit("ok");
+  await starting;
+  assert.equal(settled, true);
+  await h.runtime.stop();
+  assert.equal((await h.runtime.waitForTermination()).reason, "OPERATOR_STOP");
+});
+
+test("lifecycle adapter rejects uninstrumentable SDKs and join failures", async () => {
+  assert.throws(() => createProductionStreamAdapter({}, () => {}), /INSTRUMENTATION_UNAVAILABLE/);
+  for (const status of ["error", "timeout"] as const) {
+    const h = lifecycleRuntime();
+    const starting = h.runtime.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    h.sdk.socket.emitOpen();
+    h.sdk.channel.joinPush.emit(status, { reason: "join failed" });
+    await assert.rejects(starting);
+    const result = await h.runtime.waitForTermination();
+    assert.equal(result.reason, "STREAM_ERROR");
+    assert.equal(result.fatal, true);
+  }
+});
+
+test("unexpected close, second open, heartbeat teardown, and channel rejoin are permanently fatal", async () => {
+  for (const signal of ["close", "second-open", "heartbeat", "channel"] as const) {
+    const h = lifecycleRuntime();
+    const starting = h.runtime.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    h.sdk.socket.emitOpen();
+    h.sdk.channel.joinPush.emit("ok");
+    await starting;
+    if (signal === "close") h.sdk.socket.emitClose({ code: 1006, reason: "abnormal", wasClean: false });
+    if (signal === "second-open") h.sdk.socket.emitOpen();
+    if (signal === "heartbeat") h.sdk.socket.emitClose({ code: 1000, reason: "heartbeat timeout", wasClean: true });
+    if (signal === "channel") { h.sdk.channel.emitError({ reason: "channel error" }); h.sdk.channel.joinPush.emit("ok"); }
+    const result = await h.runtime.waitForTermination();
+    assert.equal(result.reason, "STREAM_ERROR");
+    assert.equal(result.fatal, true);
+    h.sdk.eventCallback?.({ event_type: "item_listed" });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    assert.equal(h.persisted, 0);
+  }
+});
+
+test("expected operator stop and external abort do not become continuity failures", async () => {
+  const stopped = lifecycleRuntime();
+  const startStopped = stopped.runtime.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  stopped.sdk.socket.emitOpen();
+  stopped.sdk.channel.joinPush.emit("ok");
+  await startStopped;
+  await stopped.runtime.stop();
+  const stoppedResult = await stopped.runtime.waitForTermination();
+  assert.equal(stoppedResult.reason, "OPERATOR_STOP");
+  assert.equal(stoppedResult.fatal, false);
+
+  const abortController = new AbortController();
+  const aborted = lifecycleRuntime(() => {}, abortController.signal);
+  const startAborted = aborted.runtime.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  aborted.sdk.socket.emitOpen();
+  aborted.sdk.channel.joinPush.emit("ok");
+  await startAborted;
+  abortController.abort();
+  const abortedResult = await aborted.runtime.waitForTermination();
+  assert.equal(abortedResult.reason, "EXTERNAL_ABORT");
+  assert.equal(abortedResult.fatal, false);
 });

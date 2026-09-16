@@ -84,14 +84,18 @@ export async function runPublishedInitialBaselineAdoptionRecovery(deps: Publishe
   const evidence = await readSnapshot(reader, deps.sweepId);
   const integrated = await (deps.reconstruct ?? reconstructIntegratedEvidence)(reader, deps.sweepId, publication.sourceArtifactIdentity.sourceProvenance);
   if (integrated.status !== "VALID") fail("INITIAL_BASELINE_EVIDENCE_UNTRUSTED");
-  const projection = (deps.project ?? projectInitialGenerationBaseline)(evidence, { sourceEvidencePath: "active-listings-snapshot.json", sweepId: deps.sweepId });
+  const historicalPath = typeof (integrated.candidate?.payload as any)?.sourceEvidencePath === "string" ? String((integrated.candidate?.payload as any).sourceEvidencePath) : "active-listings-snapshot.json";
+  const projection = (deps.project ?? projectInitialGenerationBaseline)(evidence, { sourceEvidencePath: historicalPath, sweepId: deps.sweepId });
   const plan = (deps.planFactory ?? createInitialBaselineAdoptionPlan)({ evidence, projection, integratedEvidence: integrated, publication });
   if (!isTrustedInitialBaselineAdoptionPlan(plan)) fail("INITIAL_BASELINE_PLAN_UNTRUSTED");
   if (receipts.rows.length === 1) {
     if (String(receipts.rows[0].adoption_id) !== plan.adoptionId) fail("INITIAL_BASELINE_DURABLE_CORRUPTION");
-    const verified = await (deps.postAdoptionVerifier ?? ((p, pub) => defaultPostAdoptionVerifier(deps.pool, p, pub)))(plan, publication);
-    await verifyLease(probe, initialLease);
-    return { status: verified ? "ALREADY_VERIFIED_ADOPTED" : "ADOPTED_WITH_POSTCONDITION_FAILURE", publicationId: publication.generationPublicationId, sweepId: publication.sweepId, adoptionId: String(receipts.rows[0].adoption_id), publicationCommitted: true, adoptionCommitted: true, postAdoptionVerified: verified, ingestionContinuityMaintained: verified };
+    let verified = false; let continuity = false; let reason: string | undefined;
+    try { verified = await (deps.postAdoptionVerifier ?? ((p, pub) => defaultPostAdoptionVerifier(deps.pool, p, pub)))(plan, publication); if (!verified) reason = "POST_ADOPTION_DURABLE_VERIFICATION_FAILED"; }
+    catch { reason = "POST_ADOPTION_DURABLE_VERIFICATION_FAILED"; }
+    try { await verifyLease(probe, initialLease); continuity = true; }
+    catch { reason = reason ? `${reason};POST_ADOPTION_INGESTION_CONTINUITY_LOST` : "POST_ADOPTION_INGESTION_CONTINUITY_LOST"; }
+    return { status: verified && continuity ? "ALREADY_VERIFIED_ADOPTED" : "ADOPTED_WITH_POSTCONDITION_FAILURE", publicationId: publication.generationPublicationId, sweepId: publication.sweepId, adoptionId: String(receipts.rows[0].adoption_id), publicationCommitted: true, adoptionCommitted: true, postAdoptionVerified: verified, ingestionContinuityMaintained: continuity, reason };
   }
   let adoption: Awaited<ReturnType<PostgresInitialBaselineAdoptionStore["adopt"]>>;
   try { adoption = await (deps.adoptionStore ?? new PostgresInitialBaselineAdoptionStore(deps.pool)).adopt(plan); }

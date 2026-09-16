@@ -5,6 +5,7 @@ import path from "node:path";
 import { eventTypesForProfile } from "../src/eventTypes.js";
 import { assertProductionProfile, createProductionInboxController, formatProductionRuntimeDiagnostic, PRODUCTION_EVENT_TYPES, ProductionIngestionRuntime, productionDatabasePreflight } from "../src/runtime/productionIngestionRuntime.js";
 import { DEFAULT_DURABLE_INBOX_READINESS_POLICY, evaluateDurableInboxReadiness } from "../src/runtime/durableInboxRuntimeController.js";
+import { redactString, serializeDiagnostic } from "../src/logger.js";
 
 function pool(database = "server_otg") {
   const queries: string[] = [];
@@ -316,7 +317,7 @@ test("plain SDK objects retain bounded structured diagnostics and first fatal wi
 test("structured diagnostics retain nested SDK material and redact nested secrets", () => {
   const diagnostic = formatProductionRuntimeDiagnostic({
     event: "phx_error",
-    payload: { status: 503, reason: "upstream unavailable", token: "NESTED_TOKEN_SENTINEL" },
+    payload: { status: 503, reason: "upstream unavailable", message: "apiKey=NESTED_MESSAGE_SENTINEL", token: "NESTED_TOKEN_SENTINEL" },
     response: { status: 401, statusText: "Unauthorized", apiKey: "NESTED_API_KEY_SENTINEL" },
     credentials: { authorization: "NESTED_AUTH_SENTINEL", cookie: "NESTED_COOKIE_SENTINEL", password: "NESTED_PASSWORD_SENTINEL", DATABASE_URL: "NESTED_DB_SENTINEL" }
   });
@@ -325,7 +326,7 @@ test("structured diagnostics retain nested SDK material and redact nested secret
   assert.match(diagnostic, /upstream unavailable/);
   assert.match(diagnostic, /401/);
   assert.match(diagnostic, /Unauthorized/);
-  for (const secret of ["NESTED_TOKEN_SENTINEL", "NESTED_API_KEY_SENTINEL", "NESTED_AUTH_SENTINEL", "NESTED_COOKIE_SENTINEL", "NESTED_PASSWORD_SENTINEL", "NESTED_DB_SENTINEL"]) assert.doesNotMatch(diagnostic, new RegExp(secret));
+  for (const secret of ["NESTED_TOKEN_SENTINEL", "NESTED_MESSAGE_SENTINEL", "NESTED_API_KEY_SENTINEL", "NESTED_AUTH_SENTINEL", "NESTED_COOKIE_SENTINEL", "NESTED_PASSWORD_SENTINEL", "NESTED_DB_SENTINEL"]) assert.doesNotMatch(diagnostic, new RegExp(secret));
   assert.ok(diagnostic.length <= 2_000);
 });
 
@@ -368,4 +369,59 @@ test("ingress and worker fatal paths preserve their first diagnostic", async () 
   const workerResult = await worker.waitForTermination();
   assert.equal(workerResult.reason, "WORKER_ERROR");
   assert.match(workerResult.fatalDiagnostic ?? "", /EWORKER/);
+});
+
+test("redactString removes embedded credentials across secret key families and query parameters", () => {
+  const cases = [
+    ["password=PASSWORD_SENTINEL", "PASSWORD_SENTINEL"],
+    ["\"password\":\"JSON_PASSWORD_SENTINEL\"", "JSON_PASSWORD_SENTINEL"],
+    ["secret: SECRET_SENTINEL", "SECRET_SENTINEL"],
+    ["apiKey=APIKEY_SENTINEL", "APIKEY_SENTINEL"],
+    ["api_key=API_UNDERSCORE_SENTINEL", "API_UNDERSCORE_SENTINEL"],
+    ["DATABASE_URL=DATABASE_SENTINEL", "DATABASE_SENTINEL"],
+    ["connectionString=CONNECTION_SENTINEL", "CONNECTION_SENTINEL"],
+    ["proxyPass=PROXY_SENTINEL", "PROXY_SENTINEL"],
+    ["Authorization: Bearer AUTH_BEARER_SENTINEL", "AUTH_BEARER_SENTINEL"],
+    ["Authorization=Basic AUTH_BASIC_SENTINEL", "AUTH_BASIC_SENTINEL"],
+    ["x-api-key: XAPI_SENTINEL", "XAPI_SENTINEL"],
+    ["cookie=COOKIE_SENTINEL", "COOKIE_SENTINEL"]
+  ] as const;
+  for (const [input, sentinel] of cases) {
+    const output = redactString(input);
+    assert.doesNotMatch(output, new RegExp(sentinel));
+    assert.match(output, /<REDACTED>/i);
+  }
+  const query = redactString("https://example.invalid/path?keep=visible&token=TOKEN_QUERY_SENTINEL&api_key=API_QUERY_SENTINEL&apiKey=API_CAMEL_QUERY_SENTINEL&x-api-key=XAPI_QUERY_SENTINEL&password=PASSWORD_QUERY_SENTINEL");
+  assert.match(query, /keep=visible/);
+  for (const sentinel of ["TOKEN_QUERY_SENTINEL", "API_QUERY_SENTINEL", "API_CAMEL_QUERY_SENTINEL", "XAPI_QUERY_SENTINEL", "PASSWORD_QUERY_SENTINEL"]) assert.doesNotMatch(query, new RegExp(sentinel));
+  assert.match(redactString("https://user:URL_PASSWORD_SENTINEL@example.invalid/path"), /<REDACTED>@example\.invalid/);
+});
+
+test("error messages, stacks, and SDK object strings are redacted without losing useful diagnostics", () => {
+  const error = new Error("connection failed password=MESSAGE_PASSWORD_SENTINEL");
+  error.stack = "Error: secret: STACK_SECRET_SENTINEL\n    at read (apiKey=STACK_API_SENTINEL)";
+  const errorDiagnostic = formatProductionRuntimeDiagnostic(error);
+  for (const sentinel of ["MESSAGE_PASSWORD_SENTINEL", "STACK_SECRET_SENTINEL", "STACK_API_SENTINEL"]) assert.doesNotMatch(errorDiagnostic, new RegExp(sentinel));
+  assert.match(errorDiagnostic, /Error/);
+  assert.match(errorDiagnostic, /connection failed/);
+  const sdkDiagnostic = formatProductionRuntimeDiagnostic({
+    code: "EUPSTREAM",
+    message: "connection failed apiKey=SDK_KEY_SENTINEL",
+    reason: "Authorization: Bearer SDK_AUTH_SENTINEL"
+  });
+  assert.match(sdkDiagnostic, /EUPSTREAM/);
+  assert.match(sdkDiagnostic, /connection failed/);
+  assert.doesNotMatch(sdkDiagnostic, /SDK_KEY_SENTINEL|SDK_AUTH_SENTINEL/);
+});
+
+test("symbol-keyed secrets are omitted while non-secret symbol diagnostics remain safe", () => {
+  const secretSymbol = Symbol("apiKey");
+  const publicSymbol = Symbol("event");
+  const value: Record<PropertyKey, unknown> = { [secretSymbol]: "SYMBOL_SECRET_SENTINEL", [publicSymbol]: "phx_error" };
+  const serialized = serializeDiagnostic(value);
+  const text = JSON.stringify(serialized);
+  assert.doesNotMatch(text, /SYMBOL_SECRET_SENTINEL/);
+  assert.match(text, /Symbol\(event\)/);
+  assert.match(text, /phx_error/);
+  assert.doesNotMatch(formatProductionRuntimeDiagnostic(value), /SYMBOL_SECRET_SENTINEL/);
 });

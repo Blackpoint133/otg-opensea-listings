@@ -7,11 +7,17 @@ const MAX_DEPTH = 4;
 const MAX_ARRAY = 20;
 const MAX_STRING = 2000;
 const SECRET_KEY = /token|password|secret|authorization|x-api-key|cookie|proxy.?pass|api.?key|database.?url|connection.?string/i;
+const SECRET_TEXT_KEY = /(?:x[-_]?api[-_]?key|api[-_]?key|authorization|cookie|proxy[\s_-]?(?:password|pass)|database[-_]?url|connection[-_]?string|token|password|secret)/i;
+const SECRET_TEXT_ASSIGNMENT = /(^|[\s"'`([{,;?&])((?:x[-_]?api[-_]?key|api[-_]?key|authorization|cookie|proxy[\s_-]?(?:password|pass)|database[-_]?url|connection[-_]?string|token|password|secret))(["']?\s*[:=]\s*|\s+)(?:"[^"]*"|'[^']*'|(?:(?:Bearer|Basic)\s+)?[^\s,;&}"']+)/gi;
 
 export function redactString(value: string): string {
   return value
-    .replace(/([?&]token=)[^&\s]+/gi, "$1<REDACTED>")
-    .replace(/(authorization\s*[:=]\s*|x-api-key\s*[:=]\s*|cookie\s*[:=]\s*)[^,\s]+/gi, "$1<REDACTED>")
+    .replace(SECRET_TEXT_ASSIGNMENT, (_match, prefix: string, key: string, separator: string) => {
+      // Preserve the logger's historical token-query spelling; other callers
+      // use the lower-case marker in their established sanitized messages.
+      const marker = key.toLowerCase() === "token" && /^[?&]/.test(prefix) ? "<REDACTED>" : "<redacted>";
+      return `${prefix}${key}${separator}${marker}`;
+    })
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1<REDACTED>@")
     .slice(0, MAX_STRING);
 }
@@ -81,7 +87,12 @@ export function serializeDiagnostic(value: unknown): Record<string, unknown> {
   }
   result.symbol_values = {};
   for (const symbol of symbols) {
-    try { (result.symbol_values as Record<string, unknown>)[String(symbol)] = safeValue(object[symbol], 1, seen); } catch { (result.symbol_values as Record<string, unknown>)[String(symbol)] = "<UNREADABLE>"; }
+    const symbolName = String(symbol);
+    if (SECRET_TEXT_KEY.test(symbolName)) {
+      (result.symbol_values as Record<string, unknown>)[symbolName] = "<REDACTED>";
+      continue;
+    }
+    try { (result.symbol_values as Record<string, unknown>)[symbolName] = safeValue(object[symbol], 1, seen); } catch { (result.symbol_values as Record<string, unknown>)[symbolName] = "<UNREADABLE>"; }
   }
   return result;
 }

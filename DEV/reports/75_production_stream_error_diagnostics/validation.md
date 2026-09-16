@@ -2,18 +2,23 @@
 
 ## Executable coverage
 
-- Production ingestion focused file: `tests/productionIngestionRuntime.test.ts` — **24 passed, 0 failed**.
+- Production ingestion focused file: `tests/productionIngestionRuntime.test.ts` — **27 passed, 0 failed**.
 - Structured plain SDK object preserves `ECONNRESET`, errno, syscall, hostname, and reason; termination remains fatal `STREAM_ERROR` and is not `[object Object]`.
 - Nested Phoenix/HTTP-like material preserves event/status/reason fields while nested token, API key, authorization, cookie, password, and `DATABASE_URL` sentinel values are absent from both the runtime log line and `fatalDiagnostic`.
 - Error and string diagnostics remain useful; circular objects, throwing getters, deep values, large strings/arrays, and bounded output are safe.
 - Cleanup disconnect timeout is secondary and cannot overwrite the first fatal diagnostic.
 - Ingress persistence and worker fatal paths retain structured diagnostics.
+- Object-key redaction: **PASS**.
+- String-embedded secret redaction: **PASS** across password, secret, API-key, database URL, connection string, proxy, authorization, cookie, and query forms.
+- Authorization Bearer/Basic credentials: **PASS**.
+- Error message/stack redaction: **PASS**.
+- Secret symbol values: **PASS**; non-secret symbol material remains safely represented.
 
 ## Gates
 
 - Build: **PASS** (`node .\\node_modules\\typescript\\bin\\tsc -p tsconfig.json`).
 - Typecheck: **PASS** (`node .\\node_modules\\typescript\\bin\\tsc -p tsconfig.json --noEmit`).
-- Hermetic suite: **1171 passed, 0 failed** (`node scripts/runHermeticTests.mjs`).
+- Hermetic suite: **1174 passed, 0 failed** (`node scripts/runHermeticTests.mjs`).
 - Git diff check: **PASS** (`git diff --check`).
 
 ## Safety audit

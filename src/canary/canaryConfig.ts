@@ -1,6 +1,7 @@
 import path from "node:path";
 import dotenv from "dotenv";
 import { parseLiveWritesEnabled, type LiveWriterConfig } from "../writer/writerConfig.js";
+import { resolveProjectEnvPath } from "../config/projectEnv.js";
 
 export interface CanaryConfig {
   canaryEnabled: boolean;
@@ -17,7 +18,7 @@ export interface CanaryConfig {
 export const CANARY_EXPECTED_DATABASE = "server_otg" as const;
 
 const rootDir = path.resolve(import.meta.dirname, "..", "..");
-const envPath = path.resolve(rootDir, "..", ".env");
+const envPath = resolveProjectEnvPath();
 
 function parsePositiveInteger(value: string | undefined, name: string, fallback: number, min: number, max: number): number {
   const text = value === undefined || value.trim() === "" ? String(fallback) : value.trim();

@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { resolveProjectEnvPath } from "../src/config/projectEnv.js";
 import { loadCanonicalProductionOpenSeaApiKey, PRODUCTION_OPENSEA_API_KEY_SOURCE_CONFLICT } from "../src/runtime/productionOpenSeaCredential.js";
 import { ProductionIngestionRuntime } from "../src/runtime/productionIngestionRuntime.js";
 
@@ -50,7 +51,7 @@ test("canonical path is module-relative and unaffected by process.cwd", async ()
   try {
     process.chdir(path.dirname(file.path));
     assert.equal(loadCanonicalProductionOpenSeaApiKey({ readFileSync: (requested, encoding) => { requestedPath = requested; return file.read(requested, encoding); }, ambientValue: undefined }), "canonical-test-value");
-    assert.equal(path.normalize(requestedPath), path.normalize(path.resolve(import.meta.dirname, "..", "..", ".env")));
+    assert.equal(path.normalize(requestedPath), path.normalize(resolveProjectEnvPath()));
   } finally { process.chdir(originalCwd); await file.close(); }
 });
 

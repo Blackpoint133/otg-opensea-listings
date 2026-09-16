@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import dotenv from "dotenv";
+import { resolveProjectEnvPath } from "../config/projectEnv.js";
 
 export const PRODUCTION_OPENSEA_API_KEY_SOURCE_CONFLICT = "PRODUCTION_OPENSEA_API_KEY_SOURCE_CONFLICT";
 
@@ -10,7 +10,7 @@ export interface CanonicalOpenSeaCredentialLoaderOptions {
   readonly ambientValue?: string | undefined;
 }
 function canonicalEnvPath(): string {
-  return path.resolve(import.meta.dirname, "..", "..", "..", ".env");
+  return resolveProjectEnvPath();
 }
 
 function activeAssignmentCount(contents: string): number {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import dotenv from "dotenv";
 import { eventTypesForProfile, isCaptureProfile, type CaptureProfile } from "./eventTypes.js";
+import { resolveProjectEnvPath } from "./config/projectEnv.js";
 
 export type LogLevelName = "debug" | "info" | "warn" | "error";
 
@@ -23,7 +24,7 @@ export interface ProbeConfig {
 }
 
 const rootDir = path.resolve(import.meta.dirname, "..");
-const envPath = path.resolve(rootDir, "..", ".env");
+const envPath = resolveProjectEnvPath();
 
 export function parsePositiveNumber(value: string | undefined, name: string, fallback: number): number {
   const candidate = value === undefined || value.trim() === "" ? fallback : Number(value);

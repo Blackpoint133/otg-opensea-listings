@@ -1,7 +1,8 @@
-import path from "node:path";
+import fs from "node:fs";
 import dotenv from "dotenv";
 import pg from "pg";
 import type { DbPool } from "./types.js";
+import { resolveProjectEnvPath } from "../config/projectEnv.js";
 
 const { Pool, types } = pg;
 
@@ -21,8 +22,12 @@ export interface DatabaseConfig {
   queryTimeoutMillis?: number;
 }
 
-const rootDir = path.resolve(import.meta.dirname, "..", "..");
-const envPath = path.resolve(rootDir, "..", ".env");
+export interface DatabaseConfigLoadOptions {
+  /** Hermetic seam; production uses the project-local file path. */
+  readonly readFileSync?: (filePath: string, encoding: "utf8") => string;
+  /** Hermetic seam for callers that provide a complete file-backed environment. */
+  readonly fileEnv?: NodeJS.ProcessEnv;
+}
 
 function required(value: string | undefined, name: string): string {
   const trimmed = value?.trim();
@@ -30,9 +35,18 @@ function required(value: string | undefined, name: string): string {
   return trimmed;
 }
 
-export function loadDatabaseConfig(env: NodeJS.ProcessEnv = process.env): DatabaseConfig {
-  const fileEnv = dotenv.config({ path: envPath }).parsed ?? {};
-  const merged = env === process.env ? { ...fileEnv, ...process.env } : { ...fileEnv, ...env };
+export function loadDatabaseConfig(env: NodeJS.ProcessEnv = process.env, options: DatabaseConfigLoadOptions = {}): DatabaseConfig {
+  let fileEnv: NodeJS.ProcessEnv;
+  if (options.fileEnv !== undefined) fileEnv = options.fileEnv;
+  else {
+    const readFileSync = options.readFileSync ?? ((filePath: string, encoding: "utf8") => fs.readFileSync(filePath, encoding));
+    let contents: string;
+    try { contents = readFileSync(resolveProjectEnvPath(), "utf8"); }
+    catch { throw new Error("PROJECT_ENV_FILE_MISSING"); }
+    try { fileEnv = dotenv.parse(contents); }
+    catch { throw new Error("PROJECT_ENV_FILE_INVALID"); }
+  }
+  const merged = { ...fileEnv, ...env };
   const portText = required(merged.POSTGRES_PORT, "POSTGRES_PORT");
   const port = Number(portText);
   if (!Number.isInteger(port) || port <= 0) throw new Error("POSTGRES_PORT must be a positive integer");

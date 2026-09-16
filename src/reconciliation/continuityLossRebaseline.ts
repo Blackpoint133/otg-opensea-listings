@@ -146,6 +146,12 @@ const ORDER_EVENTS = new Set(["item_listed", "item_cancelled", "item_sold", "ord
 const ACCEPTED_STATUSES = new Set(["applied", "reconciliation_required", "ignored_duplicate", "ignored_older"]);
 function eventTime(event: NormalizedOrderEvent | NormalizedTransferEvent): number | null { const value = event.eventType === "item_transferred" ? event.eventTimestamp ?? event.transactionTimestamp : event.eventTimestamp; const parsed = value ? Date.parse(value) : NaN; return Number.isFinite(parsed) ? parsed : null; }
 function sameIdentity(existing: any, row: InitialBaselineRowPlan): boolean { return existing.order_hash === row.orderHash && existing.nft_id === row.nftId && existing.chain === row.chain && existing.contract_address === row.contractAddress && String(existing.token_id) === row.tokenId && existing.collection_slug === row.collectionSlug; }
+function validateJournalIdentity(row: any, normalized: NormalizedOrderEvent | NormalizedTransferEvent): void {
+  if ("orderHash" in normalized && normalized.orderHash !== undefined && normalized.orderHash !== null && normalized.orderHash !== row.order_hash) fail("CONTINUITY_LOSS_REBASELINE_EVENT_IDENTITY_INVALID");
+  if (normalized.nft) {
+    if (normalized.nft.chain !== row.chain || normalized.nft.contractAddress !== row.contract_address || String(normalized.nft.tokenId) !== String(row.token_id)) fail("CONTINUITY_LOSS_REBASELINE_EVENT_IDENTITY_INVALID");
+  }
+}
 
 export const CONTINUITY_REBASELINE_INSERT_COLUMNS = ["order_hash","nft_id","chain","contract_address","token_id","collection_slug","seller_address","price_raw","price_normalized","payment_token_address","payment_token_symbol","payment_token_decimals","listing_start_at","expiration_at","status","is_active","needs_reconciliation","reconciliation_reason","last_order_event_type","last_order_event_timestamp","last_order_event_version","last_nft_event_timestamp","last_nft_event_version","last_transfer_transaction_hash","last_stream_received_at","source","last_reconciled_at","created_at","updated_at","raw_last_event","protocol_address","initial_baseline_adoption_id","raw_baseline_listing"] as const;
 export const CONTINUITY_REBASELINE_INSERT_EXPRESSIONS = ["$1","$2","$3","$4","$5","$6","$7","$8","$9","$10","$11","$12","$13","$14","'active'","true","false","NULL","NULL","NULL","NULL","NULL","NULL","NULL","NULL","$15","$16","$16","$16","$17::jsonb","$18","$19","$20::jsonb"] as const;
@@ -183,12 +189,17 @@ async function replay(client: TransactionClient, plan: ContinuityLossRebaselineP
     if (normalized.eventType === "item_transferred") {
       if (!normalized.nft || normalized.nft.chain !== row.chain || normalized.nft.contractAddress !== row.contract_address || normalized.nft.tokenId !== row.token_id) fail("CONTINUITY_LOSS_REBASELINE_EVENT_IDENTITY_INVALID");
       const targets = await findActiveOrdersForNftForUpdate(client, { chain: row.chain, contractAddress: row.contract_address, tokenId: row.token_id });
+      // Transfer handling mirrors the production event worker: only a
+      // non-ignored transfer suppression mutates listing state.  An ignored
+      // transfer is intentionally not persisted (NFT state remains owned by
+      // the live worker and is out of scope for rebaseline replay).
       for (const target of targets) { const reduced = applyTransferToOrder(target, normalized, adoptedAt); if (reduced.state && !reduced.ignored) await upsertOrderState(client, reduced.state); }
     } else {
       const orderEvent = normalized as NormalizedOrderEvent;
+      validateJournalIdentity(row, orderEvent);
       const orderHash = orderEvent.orderHash;
       if (typeof orderHash !== "string" || orderHash !== row.order_hash) throw new Error("CONTINUITY_LOSS_REBASELINE_EVENT_IDENTITY_INVALID");
-      const current = await getOrderStateForUpdate(client, orderHash); const reduced = reduceOrderState(current, { ...orderEvent, orderHash } as NormalizedOrderEvent, adoptedAt); if (reduced.state && !reduced.ignored) await upsertOrderState(client, reduced.state);
+      const current = await getOrderStateForUpdate(client, orderHash); const reduced = reduceOrderState(current, { ...orderEvent, orderHash } as NormalizedOrderEvent, adoptedAt); if (reduced.state) await upsertOrderState(client, reduced.state);
     }
   }
 }

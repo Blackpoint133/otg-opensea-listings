@@ -17,6 +17,11 @@ function instantValue(value: unknown): string | null { const s = scalar(value); 
 function numericEqual(a: unknown, b: unknown): boolean { const left = scalar(a); const right = scalar(b); if (left === null || right === null) return left === right; const norm = (v: string) => { const [whole, fraction = ""] = v.split("."); return `${whole.replace(/^(-?)0+(?=\d)/, "$1")}.${fraction.replace(/0+$/, "") || "0"}`; }; return norm(left) === norm(right); }
 function instant(value: unknown): string | null { if (value === null || value === undefined) return null; const date = value instanceof Date ? value : new Date(String(value)); return Number.isNaN(date.getTime()) ? null : date.toISOString(); }
 function lifecycleEqual(actual: any, expected: OrderState): boolean { return actual.status === expected.status && Boolean(actual.is_active) === expected.isActive && Boolean(actual.needs_reconciliation) === expected.needsReconciliation && (actual.reconciliation_reason ?? null) === expected.reconciliationReason && (actual.last_order_event_type ?? null) === expected.lastOrderEventType && instant(actual.last_order_event_timestamp) === instant(expected.lastOrderEventTimestamp) && (actual.last_order_event_version ?? null) === expected.lastOrderEventVersion && instant(actual.last_nft_event_timestamp) === instant(expected.lastNftEventTimestamp) && (actual.last_nft_event_version ?? null) === expected.lastNftEventVersion && (actual.last_transfer_transaction_hash ?? null) === expected.lastTransferTransactionHash; }
+function journalIdentityValid(row: any, normalized: NormalizedOrderEvent | NormalizedTransferEvent): boolean {
+  if ("orderHash" in normalized && normalized.orderHash !== undefined && normalized.orderHash !== null && normalized.orderHash !== row.order_hash) return false;
+  if (normalized.nft && (normalized.nft.chain !== row.chain || normalized.nft.contractAddress !== row.contract_address || String(normalized.nft.tokenId) !== String(row.token_id))) return false;
+  return true;
+}
 
 /** Fail-closed durable verifier for continuity-loss adoption.  It deliberately
  * returns only a boolean so no database or credential material can leak into
@@ -56,14 +61,18 @@ export async function verifyContinuityLossRebaselineDurable(
       if (eventRow.processing_status === "ignored_duplicate" || eventRow.processing_status === "ignored_older") continue;
       let normalized: NormalizedOrderEvent | NormalizedTransferEvent | null; try { normalized = normalizeStoredRawEvent(eventRow.raw_payload, eventRow.received_at); } catch { normalized = null; }
       if (!normalized || eventBusinessTime(normalized) === null) return false;
+      if (!journalIdentityValid(eventRow, normalized)) return false;
       if (eventBusinessTime(normalized)! <= Date.parse(plan.snapshotCompletedAt)) continue;
       if (normalized.eventType === "item_transferred") {
         if (!normalized.nft) return false;
+        // Keep transfer replay aligned with production: ignored transfer
+        // results do not mutate listing state.  (The transfer's NFT effects
+        // are intentionally not reconstructed here.)
         for (const state of expectedStates.values()) if (state.nft.chain === normalized.nft.chain && state.nft.contractAddress === normalized.nft.contractAddress && state.nft.tokenId === normalized.nft.tokenId) { const reduced = applyTransferToOrder(state, normalized, state.updatedAt || plan.snapshotCompletedAt); if (reduced.state && !reduced.ignored) Object.assign(state, reduced.state); }
       } else {
         const order = normalized.orderHash ? expectedStates.get(normalized.orderHash) : undefined;
         if (!order) continue;
-        const reduced = reduceOrderState(order, normalized, order.updatedAt || plan.snapshotCompletedAt); if (reduced.state && !reduced.ignored) expectedStates.set(order.orderHash, reduced.state);
+        const reduced = reduceOrderState(order, normalized, order.updatedAt || plan.snapshotCompletedAt); if (reduced.state) expectedStates.set(order.orderHash, reduced.state);
       }
     }
     const durable = await pool.query<any>("SELECT order_hash,nft_id,chain,contract_address,token_id,collection_slug,seller_address,price_raw,price_normalized,payment_token_address,payment_token_symbol,payment_token_decimals,listing_start_at,expiration_at,status,is_active,needs_reconciliation,reconciliation_reason,last_order_event_type,last_order_event_timestamp,last_order_event_version,last_nft_event_timestamp,last_nft_event_version,last_transfer_transaction_hash,source,protocol_address,initial_baseline_adoption_id,raw_baseline_listing FROM public.opensea_listings_v2 WHERE initial_baseline_adoption_id=$1", [plan.adoptionId]);

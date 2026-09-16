@@ -63,7 +63,7 @@ class StatefulReplayClient {
     if (text === "BEGIN" || text.startsWith("SET LOCAL") || text.startsWith("LOCK TABLE") || text === "COMMIT" || text === "ROLLBACK") return { rows: [], rowCount: 0 };
     if (text.includes("sequence_key")) return { rows: [{ sequence_key: "targeted-verifier-generation" }], rowCount: 1 };
     if (text.includes("initial_baseline_adoptions WHERE adoption_id")) return { rows: this.receipt ? [this.receipt] : [], rowCount: this.receipt ? 1 : 0 };
-    if (text.includes("targeted_verifier_generation_publications")) { const rows = this.publicationRows ?? [publicationRow(this.publication)]; return { rows, rowCount: rows.length }; }
+    if (text.includes("targeted_verifier_generation_publications")) { let rows = this.publicationRows ?? [publicationRow(this.publication)]; if (text.includes("WHERE generation_publication_id=$1")) rows = rows.filter((row: any) => row.generation_publication_id === values[0]); return { rows, rowCount: rows.length }; }
     if (text.includes("transaction_timestamp")) return { rows: [{ now: this.now }], rowCount: 1 };
     if (text.includes("event_id::text,event_type")) return { rows: this.after, rowCount: this.after.length };
     if (text.includes("WHERE order_hash = $1") && text.includes("FOR UPDATE")) return { rows: this.rows.has(String(values[0])) ? [this.rows.get(String(values[0]))] : [], rowCount: this.rows.has(String(values[0])) ? 1 : 0 };
@@ -71,7 +71,7 @@ class StatefulReplayClient {
     if (text.includes("WHERE chain = $1") && text.includes("status = 'active'")) return { rows: [...this.rows.values()].filter((row) => row.chain === values[0] && row.contract_address === values[1] && row.token_id === values[2] && row.status === "active" && row.is_active) };
     if (text.startsWith("INSERT INTO public.opensea_listings_v2")) { const baseline = text.includes("initial_baseline_adoption_id"); const row = this.full(values, baseline); this.rows.set(String(row.order_hash), row); return { rows: [], rowCount: 1 }; }
     if (text.startsWith("UPDATE public.opensea_listings_v2 SET protocol_address")) { const row = this.rows.get(String(values[0])); if (row) Object.assign(row, { protocol_address: values[1], initial_baseline_adoption_id: values[2], raw_baseline_listing: JSON.parse(String(values[3])) }); return { rows: [], rowCount: 1 }; }
-    if (text.startsWith("UPDATE public.opensea_listings_v2 SET nft_id=$2")) { const row = this.rows.get(String(values[0])); if (row) Object.assign(row, { nft_id: values[1], chain: values[2], contract_address: values[3], token_id: values[4], collection_slug: values[5], seller_address: values[6], price_raw: values[7], price_normalized: values[8], payment_token_address: values[9], payment_token_symbol: values[10], payment_token_decimals: values[11], listing_start_at: values[12], expiration_at: values[13], status: "active", is_active: true, needs_reconciliation: false, reconciliation_reason: null, last_order_event_type: null, last_order_event_timestamp: null, last_order_event_version: null, last_nft_event_timestamp: null, last_nft_event_version: null, last_transfer_transaction_hash: null, source: values[14], last_reconciled_at: values[15], updated_at: values[15], raw_last_event: null, protocol_address: values[16], initial_baseline_adoption_id: values[17], raw_baseline_listing: JSON.parse(String(values[18])) }); return { rows: [], rowCount: 1 }; }
+    if (text.startsWith("UPDATE public.opensea_listings_v2 SET nft_id=$2")) { const row = this.rows.get(String(values[0])); if (row) Object.assign(row, { nft_id: values[1], chain: values[2], contract_address: values[3], token_id: values[4], collection_slug: values[5], seller_address: values[6], price_raw: values[7], price_normalized: values[8], payment_token_address: values[9], payment_token_symbol: values[10], payment_token_decimals: values[11], listing_start_at: values[12], expiration_at: values[13], status: "active", is_active: true, needs_reconciliation: false, reconciliation_reason: null, last_order_event_type: null, last_order_event_timestamp: null, last_order_event_version: null, last_nft_event_timestamp: null, last_nft_event_version: null, last_transfer_transaction_hash: null, source: values[14], last_reconciled_at: values[15], updated_at: values[15], raw_last_event: null, protocol_address: values[17], initial_baseline_adoption_id: values[18], raw_baseline_listing: JSON.parse(String(values[19])) }); return { rows: [], rowCount: 1 }; }
     if (text.includes("initial_baseline_adoption_id=$1")) { const linked = [...this.rows.values()].filter((row) => row.initial_baseline_adoption_id === values[0]).map((row) => ({ order_hash: row.order_hash, initial_baseline_adoption_id: row.initial_baseline_adoption_id, protocol_address: row.protocol_address, raw_baseline_listing: row.raw_baseline_listing })); return { rows: linked, rowCount: linked.length }; }
     if (text.startsWith("INSERT INTO public.opensea_listings_initial")) { this.receipt = { schema_version: values[0], adoption_id: values[1], generation_publication_id: values[2], publication_sequence: values[3], sweep_id: values[4], source_evidence_hash: values[5], snapshot_artifact_hash: values[6], generation_root_hash: values[7], candidate_artifact_hash: values[8], barrier_artifact_hash: values[9], scope: JSON.parse(String(values[10])), scope_fingerprint: values[11], protocol_address: values[12], stable_event_id: values[13], stable_received_at: new Date(String(values[14])), snapshot_started_at: new Date(String(values[15])), snapshot_completed_at: new Date(String(values[16])), expected_order_count: values[17], adopted_order_count: values[18], rows_commitment: values[19], payload: JSON.parse(String(values[20])), adopted_at: new Date(String(values[21])) }; return { rows: [], rowCount: 1 }; }
     return { rows: [], rowCount: 0 };
@@ -207,10 +207,10 @@ test("continuity-loss rebaseline resets an existing inactive snapshot member whi
   const fixture = await trustedFixture(2);
   const newerPublication = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:03:00.000Z" }, 2);
   const anchor = createRecoveryEntryAnchor({ capturedAt: "2026-09-02T00:00:00.000Z", journalHighWater: { eventId: "10", receivedAt: "2026-09-01T00:02:00.000Z" }, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: fixture.publication.publicationSequence, supersededSweepId: fixture.publication.sweepId, adoptionCount: 0, listingCount: 2, activeListingCount: 0, genericPendingCount: 0, specializedPendingCount: 3, processingCount: 0, failedCount: 0, staleProcessingCount: 0, validProductionIngestionLeaseCount: 0 });
-  const plan = createContinuityLossRebaselinePlan({ evidence: fixture.evidence, projection: fixture.projection, integratedEvidence: fixture.integrated, publication: newerPublication, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: fixture.publication.publicationSequence, recoveryEntryAnchor: anchor });
+  const plan = createContinuityLossRebaselinePlan({ evidence: fixture.evidence, projection: fixture.projection, integratedEvidence: fixture.integrated, publication: newerPublication, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: fixture.publication.publicationSequence, supersededSweepId: fixture.publication.sweepId, recoveryEntryAnchor: anchor });
   const absent = liveDbRow(fixture.plan.rows[0], { order_hash: "0x" + "e".repeat(64), nft_id: `gunzilla/${ACTIVE_LISTINGS_CONTRACT}/99`, token_id: "99", status: "cancelled", is_active: false });
   const existing = liveDbRow(fixture.plan.rows[0], { status: "sold", is_active: false, last_order_event_timestamp: "2030-01-01T00:00:00.000Z", last_nft_event_timestamp: "2030-01-01T00:00:00.000Z", last_transfer_transaction_hash: "0x" + "f".repeat(64), needs_reconciliation: true });
-  const client = new StatefulReplayClient(newerPublication, plan, [absent, existing]); client.publicationRows = [publicationRow(newerPublication)]; client.now = "2026-09-02T00:00:00.000Z";
+  const client = new StatefulReplayClient(newerPublication, plan, [absent, existing]); client.publicationRows = [publicationRow(fixture.publication), publicationRow(newerPublication)]; client.now = "2026-09-02T00:00:00.000Z";
   const result = await new PostgresContinuityLossBaselineAdoptionStore(new StatefulReplayPool(client) as any).adopt(plan);
   assert.equal(result.outcome, "ADOPTED");
   const rebased = client.rows.get(fixture.plan.rows[0].orderHash);
@@ -225,13 +225,59 @@ test("continuity-loss rebaseline replays a real post-snapshot cancel after autho
   const fixture = await trustedFixture();
   const newerPublication = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:03:00.000Z" }, 2);
   const anchor = createRecoveryEntryAnchor({ capturedAt: "2026-09-02T00:00:00.000Z", journalHighWater: { eventId: "10", receivedAt: "2026-09-01T00:02:00.000Z" }, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, adoptionCount: 0, listingCount: 0, activeListingCount: 0, genericPendingCount: 0, specializedPendingCount: 13, processingCount: 0, failedCount: 0, staleProcessingCount: 0, validProductionIngestionLeaseCount: 0 });
-  const plan = createContinuityLossRebaselinePlan({ evidence: fixture.evidence, projection: fixture.projection, integratedEvidence: fixture.integrated, publication: newerPublication, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, recoveryEntryAnchor: anchor });
-  const client = new StatefulReplayClient(newerPublication, plan); client.publicationRows = [publicationRow(newerPublication)];
+  const plan = createContinuityLossRebaselinePlan({ evidence: fixture.evidence, projection: fixture.projection, integratedEvidence: fixture.integrated, publication: newerPublication, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, recoveryEntryAnchor: anchor });
+  const client = new StatefulReplayClient(newerPublication, plan); client.publicationRows = [publicationRow(fixture.publication), publicationRow(newerPublication)];
   const row = plan.rows[0]; const eventAt = new Date(Date.parse(plan.snapshotCompletedAt) + 1000).toISOString();
   client.after = [{ event_id: "11", event_type: "item_cancelled", processing_status: "applied", order_hash: row.orderHash, chain: row.chain, contract_address: row.contractAddress, token_id: row.tokenId, raw_payload: replayPayload("item_cancelled", row, eventAt), received_at: eventAt }];
   const result = await new PostgresContinuityLossBaselineAdoptionStore(new StatefulReplayPool(client) as any).adopt(plan);
   const final = client.rows.get(row.orderHash);
   assert.equal(result.outcome, "ADOPTED"); assert.deepEqual([final.status, final.is_active, final.initial_baseline_adoption_id], ["cancelled", false, plan.adoptionId]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test("continuity-loss order replay persists reducer state even when ignored", async () => {
+  const fixture = await trustedFixture();
+  const newerPublication = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:03:00.000Z" }, 2);
+  const anchor = createRecoveryEntryAnchor({ capturedAt: "2026-09-02T00:00:00.000Z", journalHighWater: { eventId: "10", receivedAt: "2026-09-01T00:02:00.000Z" }, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, adoptionCount: 0, listingCount: 0, activeListingCount: 0, genericPendingCount: 0, specializedPendingCount: 0, processingCount: 0, failedCount: 0, staleProcessingCount: 0, validProductionIngestionLeaseCount: 0 });
+  const plan = createContinuityLossRebaselinePlan({ evidence: fixture.evidence, projection: fixture.projection, integratedEvidence: fixture.integrated, publication: newerPublication, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, recoveryEntryAnchor: anchor });
+  const client = new StatefulReplayClient(newerPublication, plan); client.publicationRows = [publicationRow(fixture.publication), publicationRow(newerPublication)];
+  const row = plan.rows[0]; const eventAt = new Date(Date.parse(plan.snapshotCompletedAt) + 1000).toISOString();
+  client.after = [{ event_id: "11", event_type: "order_revalidate", processing_status: "reconciliation_required", order_hash: row.orderHash, chain: row.chain, contract_address: row.contractAddress, token_id: row.tokenId, raw_payload: replayPayload("order_revalidate", row, eventAt), received_at: eventAt }];
+  const result = await new PostgresContinuityLossBaselineAdoptionStore(new StatefulReplayPool(client) as any).adopt(plan);
+  const final = client.rows.get(row.orderHash);
+  assert.equal(result.outcome, "ADOPTED");
+  assert.deepEqual([final.status, final.is_active, final.needs_reconciliation, final.reconciliation_reason, final.last_order_event_type], ["active", false, true, "order_revalidate_unverified", null]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test("continuity-loss terminal conflict persists the ignored reducer state", async () => {
+  const fixture = await trustedFixture();
+  const newerPublication = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:03:00.000Z" }, 2);
+  const anchor = createRecoveryEntryAnchor({ capturedAt: "2026-09-02T00:00:00.000Z", journalHighWater: { eventId: "10", receivedAt: "2026-09-01T00:02:00.000Z" }, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, adoptionCount: 0, listingCount: 0, activeListingCount: 0, genericPendingCount: 0, specializedPendingCount: 0, processingCount: 0, failedCount: 0, staleProcessingCount: 0, validProductionIngestionLeaseCount: 0 });
+  const plan = createContinuityLossRebaselinePlan({ evidence: fixture.evidence, projection: fixture.projection, integratedEvidence: fixture.integrated, publication: newerPublication, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, recoveryEntryAnchor: anchor });
+  const client = new StatefulReplayClient(newerPublication, plan); client.publicationRows = [publicationRow(fixture.publication), publicationRow(newerPublication)];
+  const row = plan.rows[0]; const soldAt = new Date(Date.parse(plan.snapshotCompletedAt) + 1000).toISOString(); const cancelAt = new Date(Date.parse(plan.snapshotCompletedAt) + 2000).toISOString();
+  client.after = [
+    { event_id: "11", event_type: "item_sold", processing_status: "applied", order_hash: row.orderHash, chain: row.chain, contract_address: row.contractAddress, token_id: row.tokenId, raw_payload: replayPayload("item_sold", row, soldAt), received_at: soldAt },
+    { event_id: "12", event_type: "item_cancelled", processing_status: "reconciliation_required", order_hash: row.orderHash, chain: row.chain, contract_address: row.contractAddress, token_id: row.tokenId, raw_payload: replayPayload("item_cancelled", row, cancelAt), received_at: cancelAt }
+  ];
+  const result = await new PostgresContinuityLossBaselineAdoptionStore(new StatefulReplayPool(client) as any).adopt(plan);
+  const final = client.rows.get(row.orderHash);
+  assert.equal(result.outcome, "ADOPTED");
+  assert.deepEqual([final.status, final.is_active, final.needs_reconciliation, final.reconciliation_reason, final.last_order_event_type], ["sold", false, true, "terminal_event_conflict", "item_sold"]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test("continuity-loss replay rejects normalized order NFT identity conflicts before mutation", async () => {
+  const fixture = await trustedFixture();
+  const newerPublication = createGenerationPublicationEvidence({ integratedEvidence: fixture.integrated, protocolAddress: fixture.plan.protocolAddress, createdAt: "2026-09-01T00:03:00.000Z" }, 2);
+  const anchor = createRecoveryEntryAnchor({ capturedAt: "2026-09-02T00:00:00.000Z", journalHighWater: { eventId: "10", receivedAt: "2026-09-01T00:02:00.000Z" }, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, adoptionCount: 0, listingCount: 0, activeListingCount: 0, genericPendingCount: 0, specializedPendingCount: 0, processingCount: 0, failedCount: 0, staleProcessingCount: 0, validProductionIngestionLeaseCount: 0 });
+  const plan = createContinuityLossRebaselinePlan({ evidence: fixture.evidence, projection: fixture.projection, integratedEvidence: fixture.integrated, publication: newerPublication, supersededPublicationId: fixture.publication.generationPublicationId, supersededPublicationSequence: 1, supersededSweepId: fixture.publication.sweepId, recoveryEntryAnchor: anchor });
+  const client = new StatefulReplayClient(newerPublication, plan); client.publicationRows = [publicationRow(fixture.publication), publicationRow(newerPublication)];
+  const row = plan.rows[0]; const eventAt = new Date(Date.parse(plan.snapshotCompletedAt) + 1000).toISOString(); const payload = replayPayload("item_cancelled", row, eventAt); payload.payload.item.nft_id = `${row.chain}/${row.contractAddress}/999`;
+  client.after = [{ event_id: "11", event_type: "item_cancelled", processing_status: "applied", order_hash: row.orderHash, chain: row.chain, contract_address: row.contractAddress, token_id: row.tokenId, raw_payload: payload, received_at: eventAt }];
+  await assert.rejects(() => new PostgresContinuityLossBaselineAdoptionStore(new StatefulReplayPool(client) as any).adopt(plan), /EVENT_IDENTITY_INVALID/);
+  assert.ok(client.sql.includes("ROLLBACK"));
   await rm(fixture.root, { recursive: true, force: true });
 });
 

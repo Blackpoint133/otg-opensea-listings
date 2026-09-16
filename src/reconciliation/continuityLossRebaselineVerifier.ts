@@ -2,6 +2,18 @@ import type { DbPool } from "../db/types.js";
 import type { GenerationPublicationEvidenceV1 } from "./generationPublication.js";
 import type { ContinuityLossRebaselinePlanV2 } from "./continuityLossRebaseline.js";
 import { canonicalEvidence } from "./evidence/canonicalEvidence.js";
+import { normalizeStoredRawEvent } from "../db/pendingInboxApplicationService.js";
+import { reduceOrderState, applyTransferToOrder } from "../state/orderReducer.js";
+import type { OrderState, NormalizedOrderEvent, NormalizedTransferEvent } from "../state/types.js";
+
+const SUPPORTED_ORDER_EVENTS = new Set(["item_listed", "item_cancelled", "item_sold", "order_invalidate", "order_revalidate"]);
+const SAFE_STATUSES = new Set(["applied", "reconciliation_required", "ignored_duplicate", "ignored_older"]);
+function expectedBaseline(row: any): OrderState {
+  return { orderHash: row.orderHash, nft: { nftId: row.nftId, chain: row.chain, contractAddress: row.contractAddress, tokenId: row.tokenId }, collectionSlug: row.collectionSlug, seller: row.sellerAddress, price: { raw: row.priceRaw, normalizedDecimalString: row.priceNormalized, tokenAddress: row.paymentTokenAddress, symbol: row.paymentTokenSymbol, decimals: row.paymentTokenDecimals }, listingStartAt: row.listingStartAt, expirationAt: row.expirationAt, status: "active", isActive: true, needsReconciliation: false, reconciliationReason: null, lastOrderEventType: null, lastOrderEventTimestamp: null, lastOrderEventVersion: null, lastNftEventTimestamp: null, lastNftEventVersion: null, lastTransferTransactionHash: null, item: { name: null, imageUrl: null, permalink: null }, source: "continuity_loss_rebaseline", lastStreamReceivedAt: null, lastReconciledAt: null, createdAt: "", updatedAt: "", rawLastEvent: null };
+}
+function eventBusinessTime(event: NormalizedOrderEvent | NormalizedTransferEvent): number | null { const value = event.eventType === "item_transferred" ? (event.eventTimestamp ?? event.transactionTimestamp) : event.eventTimestamp; const parsed = value ? Date.parse(value) : NaN; return Number.isFinite(parsed) ? parsed : null; }
+function instant(value: unknown): string | null { if (value === null || value === undefined) return null; const date = value instanceof Date ? value : new Date(String(value)); return Number.isNaN(date.getTime()) ? null : date.toISOString(); }
+function lifecycleEqual(actual: any, expected: OrderState): boolean { return actual.status === expected.status && Boolean(actual.is_active) === expected.isActive && Boolean(actual.needs_reconciliation) === expected.needsReconciliation && (actual.reconciliation_reason ?? null) === expected.reconciliationReason && (actual.last_order_event_type ?? null) === expected.lastOrderEventType && instant(actual.last_order_event_timestamp) === instant(expected.lastOrderEventTimestamp) && (actual.last_order_event_version ?? null) === expected.lastOrderEventVersion && instant(actual.last_nft_event_timestamp) === instant(expected.lastNftEventTimestamp) && (actual.last_nft_event_version ?? null) === expected.lastNftEventVersion && (actual.last_transfer_transaction_hash ?? null) === expected.lastTransferTransactionHash; }
 
 /** Fail-closed durable verifier for continuity-loss adoption.  It deliberately
  * returns only a boolean so no database or credential material can leak into
@@ -29,6 +41,29 @@ export async function verifyContinuityLossRebaselineDurable(
       let raw: unknown = row.raw_baseline_listing; if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { return false; } }
       if (!baseline || row.initial_baseline_adoption_id !== plan.adoptionId || row.protocol_address !== plan.protocolAddress || canonicalEvidence(raw) !== canonicalEvidence(baseline.rawBaselineListing)) return false;
     }
+    const expectedStates = new Map(plan.rows.map((row) => [row.orderHash, expectedBaseline(row)]));
+    const journal = await pool.query<any>("SELECT event_id::text,event_type,processing_status,order_hash,chain,contract_address,token_id,raw_payload,received_at::text AS received_at FROM public.opensea_listings_events_v2 WHERE event_id > $1::bigint ORDER BY event_id ASC", [plan.recoveryEntryJournalEventId]);
+    let previousEventId: bigint | null = null;
+    for (const eventRow of journal.rows) {
+      if (!/^\d+$/.test(String(eventRow.event_id))) return false;
+      const eventId = BigInt(eventRow.event_id); if (previousEventId !== null && eventId <= previousEventId) return false; previousEventId = eventId;
+      if (!SUPPORTED_ORDER_EVENTS.has(eventRow.event_type) && eventRow.event_type !== "item_transferred") continue;
+      if (!SAFE_STATUSES.has(eventRow.processing_status)) return false;
+      if (eventRow.processing_status === "ignored_duplicate" || eventRow.processing_status === "ignored_older") continue;
+      let normalized: NormalizedOrderEvent | NormalizedTransferEvent | null; try { normalized = normalizeStoredRawEvent(eventRow.raw_payload, eventRow.received_at); } catch { normalized = null; }
+      if (!normalized || eventBusinessTime(normalized) === null) return false;
+      if (eventBusinessTime(normalized)! <= Date.parse(plan.snapshotCompletedAt)) continue;
+      if (normalized.eventType === "item_transferred") {
+        if (!normalized.nft) return false;
+        for (const state of expectedStates.values()) if (state.nft.chain === normalized.nft.chain && state.nft.contractAddress === normalized.nft.contractAddress && state.nft.tokenId === normalized.nft.tokenId) { const reduced = applyTransferToOrder(state, normalized, state.updatedAt || plan.snapshotCompletedAt); if (reduced.state && !reduced.ignored) Object.assign(state, reduced.state); }
+      } else {
+        const order = normalized.orderHash ? expectedStates.get(normalized.orderHash) : undefined;
+        if (!order) continue;
+        const reduced = reduceOrderState(order, normalized, order.updatedAt || plan.snapshotCompletedAt); if (reduced.state && !reduced.ignored) expectedStates.set(order.orderHash, reduced.state);
+      }
+    }
+    const durable = await pool.query<any>("SELECT order_hash,status,is_active,needs_reconciliation,reconciliation_reason,last_order_event_type,last_order_event_timestamp,last_order_event_version,last_nft_event_timestamp,last_nft_event_version,last_transfer_transaction_hash FROM public.opensea_listings_v2 WHERE initial_baseline_adoption_id=$1", [plan.adoptionId]);
+    if (durable.rows.length !== expectedStates.size || durable.rows.some((row: any) => { const expected = expectedStates.get(row.order_hash); return !expected || !lifecycleEqual(row, expected); })) return false;
     const current = await pool.query<any>("SELECT generation_publication_id,publication_sequence,publication_state,sweep_id FROM public.targeted_verifier_generation_publications WHERE generation_publication_id=$1", [publication.generationPublicationId]);
     if (current.rows.length !== 1 || current.rows[0].publication_state !== "ACCEPTED" || Number(current.rows[0].publication_sequence) !== publication.publicationSequence || current.rows[0].sweep_id !== publication.sweepId) return false;
     const accepted = await pool.query<any>("SELECT generation_publication_id,publication_sequence,publication_state,scope FROM public.targeted_verifier_generation_publications WHERE publication_state='ACCEPTED'");

@@ -64,6 +64,28 @@ test("production CLI has direct wiring and no required execute callback", () => 
   assert.match(source, /pathToFileURL/);
 });
 
+test("anchor read-only SQL and receipt verifier SQL honor real migration contracts", () => {
+  const anchorSource = fs.readFileSync(path.resolve(process.cwd(), "src/reconciliation/continuityLossRebaseline.ts"), "utf8");
+  const verifierSource = fs.readFileSync(path.resolve(process.cwd(), "src/reconciliation/continuityLossRebaselineVerifier.ts"), "utf8");
+  const anchorBody = anchorSource.slice(anchorSource.indexOf("export async function captureRecoveryEntryAnchor"), anchorSource.indexOf("export interface ContinuityLossRebaselinePlanV2"));
+  const anchorQueries = [...anchorBody.matchAll(/client\.query(?:<[^>]+>)?\((?:`|\")([\s\S]*?)(?:`|\")/g)].map((m) => m[1]);
+  for (const query of anchorQueries) assert.doesNotMatch(query, /FOR\s+(?:UPDATE|NO\s+KEY\s+UPDATE|SHARE|KEY\s+SHARE)/i);
+  const migration = fs.readFileSync(path.resolve(process.cwd(), "sql/009_add_initial_baseline_adoption.sql"), "utf8");
+  for (const column of ["schema_version","adoption_id","generation_publication_id","publication_sequence","sweep_id","source_evidence_hash","snapshot_artifact_hash","generation_root_hash","candidate_artifact_hash","barrier_artifact_hash","scope","scope_fingerprint","protocol_address","stable_event_id","stable_received_at","snapshot_started_at","snapshot_completed_at","expected_order_count","adopted_order_count","rows_commitment","payload","adopted_at"]) assert.match(migration, new RegExp(`\\b${column}\\b`, "i"));
+  assert.doesNotMatch(verifierSource, /SELECT[^\n]*raw_baseline_listing[^\n]*FROM\s+public\.opensea_listings_initial_baseline_adoptions/i);
+});
+
+test("durable verifier reconstructs lifecycle from the trusted baseline and replay cut", () => {
+  const verifier = fs.readFileSync(path.resolve(process.cwd(), "src/reconciliation/continuityLossRebaselineVerifier.ts"), "utf8");
+  assert.match(verifier, /normalizeStoredRawEvent/);
+  assert.match(verifier, /reduceOrderState/);
+  assert.match(verifier, /applyTransferToOrder/);
+  assert.match(verifier, /expectedBaseline/);
+  assert.match(verifier, /recoveryEntryJournalEventId/);
+  assert.match(verifier, /snapshotCompletedAt/);
+  assert.match(verifier, /processing_status IN \('pending','processing','failed'\)/);
+});
+
 test("continuity-loss CLI requires explicit superseded identity and confirmations", () => {
   const args = parseContinuityLossRebaselineArgs([
     "--confirm-production-continuity-loss-rebaseline", "--confirm-supersede-unadopted-publication",

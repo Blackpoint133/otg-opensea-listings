@@ -27,7 +27,11 @@ export interface DatabaseConfigLoadOptions {
   readonly readFileSync?: (filePath: string, encoding: "utf8") => string;
   /** Hermetic seam for callers that provide a complete file-backed environment. */
   readonly fileEnv?: NodeJS.ProcessEnv;
+  /** Test-only ambient environment seam for the default-production conflict check. */
+  readonly ambientEnv?: NodeJS.ProcessEnv;
 }
+
+const POSTGRES_KEYS = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB"] as const;
 
 function required(value: string | undefined, name: string): string {
   const trimmed = value?.trim();
@@ -35,7 +39,7 @@ function required(value: string | undefined, name: string): string {
   return trimmed;
 }
 
-export function loadDatabaseConfig(env: NodeJS.ProcessEnv = process.env, options: DatabaseConfigLoadOptions = {}): DatabaseConfig {
+export function loadDatabaseConfig(env: NodeJS.ProcessEnv | undefined = undefined, options: DatabaseConfigLoadOptions = {}): DatabaseConfig {
   let fileEnv: NodeJS.ProcessEnv;
   if (options.fileEnv !== undefined) fileEnv = options.fileEnv;
   else {
@@ -45,6 +49,31 @@ export function loadDatabaseConfig(env: NodeJS.ProcessEnv = process.env, options
     catch { throw new Error("PROJECT_ENV_FILE_MISSING"); }
     try { fileEnv = dotenv.parse(contents); }
     catch { throw new Error("PROJECT_ENV_FILE_INVALID"); }
+  }
+  if (env === undefined) {
+    const canonical = {
+      user: required(fileEnv.POSTGRES_USER, "POSTGRES_USER"),
+      password: required(fileEnv.POSTGRES_PASSWORD, "POSTGRES_PASSWORD"),
+      host: required(fileEnv.POSTGRES_HOST, "POSTGRES_HOST"),
+      portText: required(fileEnv.POSTGRES_PORT, "POSTGRES_PORT"),
+      database: required(fileEnv.POSTGRES_DB, "POSTGRES_DB")
+    };
+    const ambient = options.ambientEnv ?? process.env;
+    for (const key of POSTGRES_KEYS) {
+      const ambientValue = ambient[key];
+      if (ambientValue !== undefined && ambientValue.trim() !== fileEnv[key]!.trim()) throw new Error(`PRODUCTION_POSTGRES_CONFIG_SOURCE_CONFLICT:${key}`);
+    }
+    const port = Number(canonical.portText);
+    if (!Number.isInteger(port) || port <= 0) throw new Error("POSTGRES_PORT must be a positive integer");
+    return {
+      host: canonical.host,
+      port,
+      database: canonical.database,
+      user: canonical.user,
+      password: canonical.password,
+      connectionTimeoutMillis: 10_000,
+      applicationName: "opensea_listings_v2"
+    };
   }
   const merged = { ...fileEnv, ...env };
   const portText = required(merged.POSTGRES_PORT, "POSTGRES_PORT");

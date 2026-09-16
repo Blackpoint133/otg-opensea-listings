@@ -46,6 +46,27 @@ test("database config uses the project-local file and never a parent sentinel", 
   assert.equal(requested.some((filePath) => path.normalize(filePath) === path.normalize(parentEnvPath)), false);
 });
 
+test("default database loading keeps canonical values when ambient values match", () => {
+  const project = "POSTGRES_USER=project-user\nPOSTGRES_PASSWORD=project-password\nPOSTGRES_HOST=project-host\nPOSTGRES_PORT=5432\nPOSTGRES_DB=project-db\n";
+  const config = loadDatabaseConfig(undefined, { readFileSync: () => project, ambientEnv: {
+    POSTGRES_USER: " project-user ", POSTGRES_PASSWORD: "project-password", POSTGRES_HOST: "project-host", POSTGRES_PORT: "5432", POSTGRES_DB: "project-db"
+  } });
+  assert.deepEqual({ user: config.user, password: config.password, host: config.host, port: config.port, database: config.database }, { user: "project-user", password: "project-password", host: "project-host", port: 5432, database: "project-db" });
+});
+
+test("differing ambient PostgreSQL values fail closed before pool construction", () => {
+  const project = "POSTGRES_USER=project-user\nPOSTGRES_PASSWORD=project-password\nPOSTGRES_HOST=project-host\nPOSTGRES_PORT=5432\nPOSTGRES_DB=project-db\n";
+  const values: Record<string, string> = { POSTGRES_USER: "other-user", POSTGRES_PASSWORD: "other-password", POSTGRES_HOST: "other-host", POSTGRES_PORT: "6543", POSTGRES_DB: "other-db" };
+  for (const [key, value] of Object.entries(values)) {
+    let poolConstructed = false;
+    assert.throws(() => {
+      loadDatabaseConfig(undefined, { readFileSync: () => project, ambientEnv: { [key]: value } });
+      poolConstructed = true;
+    }, (error: unknown) => error instanceof Error && error.message === `PRODUCTION_POSTGRES_CONFIG_SOURCE_CONFLICT:${key}` && !error.message.includes(value));
+    assert.equal(poolConstructed, false);
+  }
+});
+
 test("explicit hermetic database environment does not read a production file", () => {
   const config = loadDatabaseConfig({ POSTGRES_USER: "test-user", POSTGRES_PASSWORD: "test-password", POSTGRES_HOST: "test-host", POSTGRES_PORT: "5432", POSTGRES_DB: "test-db" }, { fileEnv: {} });
   assert.deepEqual({ user: config.user, host: config.host, port: config.port, database: config.database }, { user: "test-user", host: "test-host", port: 5432, database: "test-db" });

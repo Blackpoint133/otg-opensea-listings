@@ -1,0 +1,15 @@
+# Task 71CONTINUITY-REBASE12 implementation
+
+Baseline: `a341abaf353667fd4a693da7589fd2ae81672135`
+
+This remediation introduces a distinct `initial-baseline-adoption-v2` plan with recovery mode `CONTINUITY_LOSS_REBASELINE`. A trusted immutable recovery-entry anchor binds the old publication identity, journal high-water, database scope, zero active listings, zero adoption, zero generic pending/processing/failed/stale rows, and zero existing ingestion leases. The anchor commitment is included in the v2 adoption ID and receipt payload.
+
+The new `PostgresContinuityLossBaselineAdoptionStore` is separate from ordinary v1 adoption. It requires the new publication to be the unique highest ACCEPTED publication for scope, resets snapshot-present existing rows to the new authoritative snapshot lifecycle (while preserving safe enrichment/created time), leaves snapshot-absent inactive rows untouched, and replays only post-new-fence events through the shared normalizer and production reducers. Transfer replay changes listing state only; NFT-state recovery is explicitly not claimed. All writes occur in one bounded transaction with rollback on failure, and provenance is retained through normal upserts.
+
+Rebaseline reset explicitly establishes seller/price/payment/listing dates and active status from the new snapshot, clears reconciliation and prior order/NFT/transfer/stream watermarks plus `raw_last_event`, and then permits only post-snapshot business-time events to supersede it. Existing immutable identity is checked before reset; unrelated rows receive no adoption provenance and are never removed or deactivated. The recovery-entry anchor is immutable and commitment-bound, including the old publication/sweep binding, journal high-water and zero-active/zero-unsafe-entry invariants. A read-only capture helper is provided for the pre-stream boundary.
+
+`runContinuityLossRebaseline` coordinates anchor capture before runtime startup, exactly one replacement runtime/lease, readiness, one injected generation/sweep result, v2 adoption, post-adoption verification, and lease continuity. It has explicit terminal states and never retries or restarts Stream. `runContinuityLossRebaselineCli` provides explicit confirmation and superseded-publication/sweep binding without import-time side effects.
+
+Ordinary v1 bootstrap/adoption and published-baseline recovery semantics are unchanged. Snapshot absence remains non-authoritative; no deactivation authority is granted. The old publication remains durable and becomes non-current only when a newer accepted publication exists.
+
+The named orchestration boundary captures the anchor before constructing/starting the replacement runtime, requires one READY lease, accepts one generation boundary, and performs no retry or automatic Stream restart. Terminal results distinguish `VERIFIED_REBASELINED_ADOPTED`, `PUBLISHED_NOT_ADOPTED`, `ADOPTED_WITH_POSTCONDITION_FAILURE`, `PRECONDITION_FAILED`, and `STREAM_EPOCH_LOST`; committed adoption is never downgraded.

@@ -306,8 +306,8 @@ export class ProductionIngestionRuntime {
 
   async start(): Promise<void> {
     if (this.pool) return;
-    const apiKey = (this.options.apiKey ?? process.env.OPENSEA_API_KEY)?.trim();
-    if (!apiKey) throw new Error("OPENSEA_API_KEY is required");
+    const apiKey = this.options.apiKey?.trim();
+    if (!apiKey) throw new Error("OPENSEA_API_KEY_MISSING");
     this.pool = this.options.createPool?.() ?? createDatabasePool({ ...loadDatabaseConfig(), applicationName: "opensea_listings_v2_production_ingestion" });
     try {
       await productionDatabasePreflight(this.pool);

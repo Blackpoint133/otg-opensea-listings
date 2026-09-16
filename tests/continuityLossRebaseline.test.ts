@@ -73,6 +73,11 @@ test("anchor read-only SQL and receipt verifier SQL honor real migration contrac
   const migration = fs.readFileSync(path.resolve(process.cwd(), "sql/009_add_initial_baseline_adoption.sql"), "utf8");
   for (const column of ["schema_version","adoption_id","generation_publication_id","publication_sequence","sweep_id","source_evidence_hash","snapshot_artifact_hash","generation_root_hash","candidate_artifact_hash","barrier_artifact_hash","scope","scope_fingerprint","protocol_address","stable_event_id","stable_received_at","snapshot_started_at","snapshot_completed_at","expected_order_count","adopted_order_count","rows_commitment","payload","adopted_at"]) assert.match(migration, new RegExp(`\\b${column}\\b`, "i"));
   assert.doesNotMatch(verifierSource, /SELECT[^\n]*raw_baseline_listing[^\n]*FROM\s+public\.opensea_listings_initial_baseline_adoptions/i);
+  const receiptSql = verifierSource.match(/SELECT\s+([^\"]+)\s+FROM\s+public\.opensea_listings_initial_baseline_adoptions/i)?.[1];
+  assert.ok(receiptSql, "receipt verifier SELECT must be discoverable");
+  const selected = receiptSql.split(",").map((column) => column.trim());
+  const allowed = new Set(["schema_version","adoption_id","generation_publication_id","publication_sequence","sweep_id","source_evidence_hash","snapshot_artifact_hash","generation_root_hash","candidate_artifact_hash","barrier_artifact_hash","scope","scope_fingerprint","protocol_address","stable_event_id","stable_received_at","snapshot_started_at","snapshot_completed_at","expected_order_count","adopted_order_count","rows_commitment","payload","adopted_at"]);
+  assert.ok(selected.every((column) => allowed.has(column)), `receipt columns must match migration 009: ${selected.join(",")}`);
 });
 
 test("durable verifier reconstructs lifecycle from the trusted baseline and replay cut", () => {

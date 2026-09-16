@@ -27,6 +27,7 @@ export interface ContinuityLossRebaselineDependencies {
   readonly verify?: (plan: ContinuityLossRebaselinePlanV2, publication: GenerationPublicationEvidenceV1) => Promise<boolean>;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly waitForTermination?: (runtime: ProductionIngestionRuntime) => Promise<unknown>;
+  readonly onSuccess?: (result: ContinuityLossRebaselineResult) => void;
 }
 
 function safeReason(error: unknown): string { return (error instanceof Error ? error.message : "CONTINUITY_LOSS_REBASELINE_FAILED").replace(/(password|secret|api[_-]?key|authorization|token|connection string)\s*[:=]\s*[^,\s]+/gi, "$1=<redacted>").slice(0, 240); }
@@ -51,11 +52,13 @@ export async function runContinuityLossRebaseline(deps: ContinuityLossRebaseline
   } catch { reason = "POST_ADOPTION_DURABLE_VERIFICATION_FAILED"; }
   try { const current = await deps.leaseProbe(); if (!current || !sameLease(initialLease, current)) throw new Error("POST_ADOPTION_INGESTION_CONTINUITY_LOST"); continuity = true; } catch { reason = reason ? `${reason};POST_ADOPTION_INGESTION_CONTINUITY_LOST` : "POST_ADOPTION_INGESTION_CONTINUITY_LOST"; }
   if (!verified || !continuity) return { status: "ADOPTED_WITH_POSTCONDITION_FAILURE", publicationId: generated.publication.generationPublicationId, adoptionId: adoption.adoptionId, publicationCommitted: true, adoptionCommitted: true, postAdoptionVerified: verified, ingestionContinuityMaintained: continuity, reason };
+  const successResult: ContinuityLossRebaselineResult = { status: "VERIFIED_REBASELINED_ADOPTED", publicationId: generated.publication.generationPublicationId, adoptionId: adoption.adoptionId, publicationCommitted: true, adoptionCommitted: true, postAdoptionVerified: true, ingestionContinuityMaintained: true };
+  deps.onSuccess?.(successResult);
   if (deps.waitForTermination) {
     try { const termination: any = await deps.waitForTermination(runtime); if (termination?.fatal) return { status: "STREAM_EPOCH_LOST", publicationId: generated.publication.generationPublicationId, adoptionId: adoption.adoptionId, publicationCommitted: true, adoptionCommitted: true, postAdoptionVerified: true, ingestionContinuityMaintained: false, reason: safeReason(termination.fatalDiagnostic ?? "STREAM_EPOCH_LOST_AFTER_ADOPTION") }; }
     catch (error) { return { status: "STREAM_EPOCH_LOST", publicationId: generated.publication.generationPublicationId, adoptionId: adoption.adoptionId, publicationCommitted: true, adoptionCommitted: true, postAdoptionVerified: true, ingestionContinuityMaintained: false, reason: safeReason(error) }; }
   }
-  return { status: "VERIFIED_REBASELINED_ADOPTED", publicationId: generated.publication.generationPublicationId, adoptionId: adoption.adoptionId, publicationCommitted: true, adoptionCommitted: true, postAdoptionVerified: true, ingestionContinuityMaintained: true };
+  return successResult;
 }
 
 /** Named orchestration boundary used by the future operator CLI. Keeping this

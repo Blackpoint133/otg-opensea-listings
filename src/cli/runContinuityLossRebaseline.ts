@@ -59,6 +59,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (publicationRow.rows.length !== 1) throw new Error("CONTINUITY_LOSS_RECOVERY_PUBLICATION_BINDING_INVALID");
     const supersededSequence = Number(publicationRow.rows[0].publication_sequence);
     const adoptionStore = new PostgresContinuityLossBaselineAdoptionStore(pool);
+    let successEmitted = false;
     const result = await runContinuityLossRebaseline({
       pool,
       apiKey,
@@ -71,9 +72,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       generation: (initialLease) => runContinuityLossGeneration({ pool, apiKey, evidenceRoot: args.evidenceRoot, leaseProbe: () => probeExternalIngestionLease(pool), expectedLease: initialLease }),
       planFactory: createContinuityLossRebaselinePlan,
       adoptionStore,
-      waitForTermination: (runtime) => runtime.waitForTermination()
+      waitForTermination: (runtime) => runtime.waitForTermination(),
+      onSuccess: (value) => { successEmitted = true; console.log(JSON.stringify(value)); }
     });
-    console.log(JSON.stringify(result));
+    if (!successEmitted || result.status !== "VERIFIED_REBASELINED_ADOPTED") console.log(JSON.stringify(result));
     process.exitCode = result.status === "VERIFIED_REBASELINED_ADOPTED" ? 0 : 2;
   } catch (error) { console.error(safeError(error)); process.exitCode = 1; }
   finally { if (pool) await closeDatabasePool(pool); }

@@ -152,7 +152,10 @@ async function replay(client: TransactionClient, plan: ContinuityLossRebaselineP
     if (!isDecimal(row.event_id)) fail("CONTINUITY_LOSS_REBASELINE_EVENT_MALFORMED");
     const id = BigInt(row.event_id); if (previous !== null && id <= previous) fail("CONTINUITY_LOSS_REBASELINE_EVENT_ORDER_INVALID"); previous = id;
     if (!ORDER_EVENTS.has(row.event_type) && row.event_type !== "item_transferred") continue;
-    if (row.chain !== SUPPORTED_CHAIN || row.contract_address !== SUPPORTED_CONTRACT_ADDRESS) continue;
+    if (row.chain === null || typeof row.chain !== "string") fail("CONTINUITY_LOSS_REBASELINE_EVENT_MALFORMED");
+    if (row.chain !== SUPPORTED_CHAIN) continue;
+    if (typeof row.contract_address !== "string" || !ADDRESS_PATTERN.test(row.contract_address)) fail("CONTINUITY_LOSS_REBASELINE_EVENT_MALFORMED");
+    if (row.contract_address !== SUPPORTED_CONTRACT_ADDRESS) continue;
     if (!ACCEPTED_STATUSES.has(row.processing_status)) fail("CONTINUITY_LOSS_REBASELINE_UNSAFE_EVENT_STATUS");
     if (row.processing_status === "ignored_duplicate" || row.processing_status === "ignored_older") continue;
     let normalized: NormalizedOrderEvent | NormalizedTransferEvent | null; try { normalized = normalizeStoredRawEvent(row.raw_payload, row.received_at); } catch { normalized = null; }

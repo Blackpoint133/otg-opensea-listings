@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { eventTypesForProfile } from "../src/eventTypes.js";
-import { assertProductionProfile, createProductionInboxController, PRODUCTION_EVENT_TYPES, ProductionIngestionRuntime, productionDatabasePreflight } from "../src/runtime/productionIngestionRuntime.js";
+import { assertProductionProfile, createProductionInboxController, formatProductionRuntimeDiagnostic, PRODUCTION_EVENT_TYPES, ProductionIngestionRuntime, productionDatabasePreflight } from "../src/runtime/productionIngestionRuntime.js";
 import { DEFAULT_DURABLE_INBOX_READINESS_POLICY, evaluateDurableInboxReadiness } from "../src/runtime/durableInboxRuntimeController.js";
 
 function pool(database = "server_otg") {
@@ -278,4 +278,94 @@ test("production runtime reuses the accepted durable controller", async () => {
   const source = await readFile(path.resolve(import.meta.dirname, "../src/runtime/productionIngestionRuntime.ts"), "utf8");
   assert.match(source, /DurableInboxRuntimeController/);
   assert.match(source, /controller!\.runOnce/);
+});
+
+test("plain SDK objects retain bounded structured diagnostics and first fatal wins", async () => {
+  const logs: string[] = [];
+  const s = stream([], logs);
+  (s.client as any).disconnect = () => { logs.push("disconnect_stuck"); };
+  const runtime = new ProductionIngestionRuntime({
+    confirmProductionIngestion: true,
+    apiKey: "test-key",
+    streamDisconnectTimeoutMs: 5,
+    createPool: () => pool(),
+    createController: () => controller(logs),
+    createStream: (_key, error) => { s.setErrorCallback(error); return s.client; },
+    logger: (message) => logs.push(message)
+  });
+  await runtime.start();
+  const termination = runtime.waitForTermination();
+  s.error({ code: "ECONNRESET", errno: -4077, syscall: "read", hostname: "stream-api.opensea.io", reason: "socket closed", payload: { token: "STREAM_SECRET_SENTINEL", status: 503 } });
+  s.error({ code: "SECOND_FATAL", reason: "must not replace first fatal" });
+  const result = await termination;
+  assert.equal(result.reason, "STREAM_ERROR");
+  assert.equal(result.fatal, true);
+  assert.match(result.fatalDiagnostic ?? "", /ECONNRESET/);
+  assert.match(result.fatalDiagnostic ?? "", /read/);
+  assert.match(result.fatalDiagnostic ?? "", /stream-api\.opensea\.io/);
+  assert.match(result.fatalDiagnostic ?? "", /socket closed/);
+  assert.doesNotMatch(result.fatalDiagnostic ?? "", /SECOND_FATAL/);
+  assert.doesNotMatch(result.fatalDiagnostic ?? "", /STREAM_SECRET_SENTINEL/);
+  assert.notEqual(result.fatalDiagnostic, "[object Object]");
+  assert.ok(logs.some((line) => line.startsWith("stream_error:") && line.includes("ECONNRESET")));
+  assert.ok(logs.every((line) => !line.includes("STREAM_SECRET_SENTINEL")));
+  assert.ok(logs.includes("stream_disconnect_timeout"));
+  assert.equal((result.fatalDiagnostic ?? "").includes("stream_disconnect_timeout"), false);
+});
+
+test("structured diagnostics retain nested SDK material and redact nested secrets", () => {
+  const diagnostic = formatProductionRuntimeDiagnostic({
+    event: "phx_error",
+    payload: { status: 503, reason: "upstream unavailable", token: "NESTED_TOKEN_SENTINEL" },
+    response: { status: 401, statusText: "Unauthorized", apiKey: "NESTED_API_KEY_SENTINEL" },
+    credentials: { authorization: "NESTED_AUTH_SENTINEL", cookie: "NESTED_COOKIE_SENTINEL", password: "NESTED_PASSWORD_SENTINEL", DATABASE_URL: "NESTED_DB_SENTINEL" }
+  });
+  assert.match(diagnostic, /phx_error/);
+  assert.match(diagnostic, /503/);
+  assert.match(diagnostic, /upstream unavailable/);
+  assert.match(diagnostic, /401/);
+  assert.match(diagnostic, /Unauthorized/);
+  for (const secret of ["NESTED_TOKEN_SENTINEL", "NESTED_API_KEY_SENTINEL", "NESTED_AUTH_SENTINEL", "NESTED_COOKIE_SENTINEL", "NESTED_PASSWORD_SENTINEL", "NESTED_DB_SENTINEL"]) assert.doesNotMatch(diagnostic, new RegExp(secret));
+  assert.ok(diagnostic.length <= 2_000);
+});
+
+test("diagnostic formatter is safe for errors, strings, circular values, getters, and large input", () => {
+  assert.match(formatProductionRuntimeDiagnostic(new Error("socket gap")), /Error/);
+  assert.match(formatProductionRuntimeDiagnostic(new Error("socket gap")), /socket gap/);
+  assert.match(formatProductionRuntimeDiagnostic("socket closed"), /socket closed/);
+  const circular: Record<string, unknown> = { code: "EPIPE" };
+  circular.self = circular;
+  assert.doesNotThrow(() => formatProductionRuntimeDiagnostic(circular));
+  assert.match(formatProductionRuntimeDiagnostic(circular), /EPIPE/);
+  const getter: Record<string, unknown> = {};
+  Object.defineProperty(getter, "message", { enumerable: true, get() { throw new Error("getter must not escape"); } });
+  assert.doesNotThrow(() => formatProductionRuntimeDiagnostic(getter));
+  const large = formatProductionRuntimeDiagnostic({ payload: "X".repeat(20_000), items: Array.from({ length: 100 }, () => "Y") });
+  assert.ok(large.length <= 2_000);
+});
+
+test("ingress and worker fatal paths preserve their first diagnostic", async () => {
+  const ingressStream = stream([], []);
+  const ingress = new ProductionIngestionRuntime({
+    confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(), createController: () => controller([]),
+    createStream: (_key, error) => { ingressStream.setErrorCallback(error); return ingressStream.client; },
+    persistEvent: async () => { throw { code: "EWRITE", reason: "durable inbox unavailable" }; }, logger: () => {}
+  });
+  await ingress.start();
+  const ingressTermination = ingress.waitForTermination();
+  ingressStream.emit({ event_type: "item_listed" });
+  const ingressResult = await ingressTermination;
+  assert.equal(ingressResult.reason, "INGRESS_PERSISTENCE_FAILURE");
+  assert.match(ingressResult.fatalDiagnostic ?? "", /EWRITE/);
+
+  const workerStream = stream([], []);
+  const worker = new ProductionIngestionRuntime({
+    confirmProductionIngestion: true, apiKey: "test-key", createPool: () => pool(),
+    createController: () => ({ async start() { return { state: "READY" }; }, async runOnce() { throw { code: "EWORKER", reason: "worker unavailable" }; }, async stop() {} } as any),
+    createStream: (_key, error) => { workerStream.setErrorCallback(error); return workerStream.client; }, logger: () => {}
+  });
+  await worker.start();
+  const workerResult = await worker.waitForTermination();
+  assert.equal(workerResult.reason, "WORKER_ERROR");
+  assert.match(workerResult.fatalDiagnostic ?? "", /EWORKER/);
 });

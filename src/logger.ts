@@ -6,7 +6,7 @@ const rank: Record<LogLevelName, number> = { debug: 10, info: 20, warn: 30, erro
 const MAX_DEPTH = 4;
 const MAX_ARRAY = 20;
 const MAX_STRING = 2000;
-const SECRET_KEY = /token|password|secret|authorization|x-api-key|cookie|proxy.?pass|api.?key/i;
+const SECRET_KEY = /token|password|secret|authorization|x-api-key|cookie|proxy.?pass|api.?key|database.?url|connection.?string/i;
 
 export function redactString(value: string): string {
   return value
@@ -34,7 +34,7 @@ function safeValue(value: unknown, depth: number, seen: WeakSet<object>): unknow
     constructor: (value as object).constructor?.name ?? null,
     tag: Object.prototype.toString.call(value)
   };
-  for (const key of ["name", "message", "code", "errno", "syscall", "hostname", "address", "port", "stack", "statusCode", "statusMessage", "reason", "wasClean", "readyState", "url", "_url"]) {
+  for (const key of ["name", "message", "code", "errno", "syscall", "hostname", "address", "port", "stack", "status", "statusCode", "statusMessage", "statusText", "reason", "wasClean", "readyState", "url", "_url"]) {
     if (SECRET_KEY.test(key)) continue;
     try {
       const field = safeScalar((value as Record<string, unknown>)[key]);
@@ -64,7 +64,7 @@ export function serializeDiagnostic(value: unknown): Record<string, unknown> {
   try { result.prototype_constructor = Object.getPrototypeOf(object)?.constructor?.name ?? null; } catch { result.prototype_constructor = "<UNREADABLE>"; }
   const seen = new WeakSet<object>();
   seen.add(object);
-  for (const key of ["name", "message", "code", "errno", "syscall", "hostname", "address", "port", "stack", "statusCode", "statusMessage", "reason", "wasClean", "readyState"]) {
+  for (const key of ["name", "message", "code", "errno", "syscall", "hostname", "address", "port", "stack", "status", "statusCode", "statusMessage", "statusText", "reason", "wasClean", "readyState"]) {
     if (SECRET_KEY.test(key)) continue;
     try {
       const field = safeScalar(object[key]);

@@ -7,6 +7,7 @@ import { getDurableInboxMetrics } from "../db/inboxRetryRepository.js";
 import { prepareDurableInboxOnStartup } from "../worker/durableInboxWorker.js";
 import { eventTypesForProfile } from "../eventTypes.js";
 import { createStreamClient } from "../streamProbe.js";
+import { redactString, serializeDiagnostic } from "../logger.js";
 import { DurableInboxRuntimeController } from "./durableInboxRuntimeController.js";
 
 export const PRODUCTION_COLLECTION = "off-the-grid";
@@ -55,6 +56,7 @@ export type ProductionTerminationReason = "OPERATOR_STOP" | "EXTERNAL_ABORT" | "
 export interface ProductionTermination {
   readonly reason: ProductionTerminationReason;
   readonly fatal: boolean;
+  readonly fatalDiagnostic: string | null;
   readonly counters: Readonly<ProductionIngestionCounters>;
 }
 
@@ -103,9 +105,21 @@ export function createProductionInboxController(pool: DbPool, hooks: ProductionC
   });
 }
 
-function safeError(error: unknown): string {
-  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return text.replace(/\b(password|token|secret|api[_-]?key|DATABASE_URL)\s*[=:]\s*[^,\s]+/gi, "$1=<REDACTED>");
+const MAX_RUNTIME_DIAGNOSTIC = 2_000;
+
+/** Formats SDK/runtime failures without exposing raw payloads or secrets. */
+export function formatProductionRuntimeDiagnostic(error: unknown): string {
+  let text: string;
+  try {
+    if (typeof error === "string") text = redactString(error);
+    else if (error === null) text = "null";
+    else if (error === undefined) text = "undefined";
+    else if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") text = String(error);
+    else text = JSON.stringify(serializeDiagnostic(error));
+  } catch {
+    text = "<UNSERIALIZABLE_DIAGNOSTIC>";
+  }
+  return redactString(text).slice(0, MAX_RUNTIME_DIAGNOSTIC);
 }
 
 export function productionDatabasePreflight(pool: DbPool): Promise<void> {
@@ -152,6 +166,7 @@ export class ProductionIngestionRuntime {
   private resolveTermination!: (termination: ProductionTermination) => void;
   private terminationReason: ProductionTerminationReason | null = null;
   private terminationFatal = false;
+  private fatalDiagnostic: string | null = null;
   private readonly log: (message: string) => void;
 
   constructor(private readonly options: ProductionIngestionOptions) {
@@ -167,7 +182,11 @@ export class ProductionIngestionRuntime {
     this.terminationReason = reason;
     this.terminationFatal = true;
     this.stopping = true;
-    if (error !== undefined) this.log(`${reason.toLowerCase()}:${safeError(error)}`);
+    if (error !== undefined) {
+      const diagnostic = formatProductionRuntimeDiagnostic(error);
+      if (this.fatalDiagnostic === null) this.fatalDiagnostic = diagnostic;
+      this.log(`${reason.toLowerCase()}:${diagnostic}`);
+    }
     queueMicrotask(() => { void this.stop().catch(() => { /* cleanup remains best-effort and termination is resolved by stop */ }); });
   }
 
@@ -240,7 +259,7 @@ export class ProductionIngestionRuntime {
         } else this.counters.inboxDuplicateExisting += 1;
       } catch (error) {
         this.counters.ingressErrors += 1;
-        this.log(`ingress_error:${safeError(error)}`);
+        this.log(`ingress_error:${formatProductionRuntimeDiagnostic(error)}`);
         this.failClosed("INGRESS_PERSISTENCE_FAILURE", error);
       } finally {
         this.ingressActive = false;
@@ -270,7 +289,7 @@ export class ProductionIngestionRuntime {
         }
       } catch (error) {
         this.counters.workerFailed += 1;
-        this.log(`worker_error:${safeError(error)}`);
+        this.log(`worker_error:${formatProductionRuntimeDiagnostic(error)}`);
         this.workerPumpStopping = true;
         this.failClosed("WORKER_ERROR", error);
       }
@@ -299,7 +318,7 @@ export class ProductionIngestionRuntime {
       if (this.stopped) return;
       if (this.terminationReason === null) this.terminationReason = "OPERATOR_STOP";
       this.stopping = true;
-      try { this.unsubscribe?.(); } catch (error) { this.log(`unsubscribe_error:${safeError(error)}`); }
+      try { this.unsubscribe?.(); } catch (error) { this.log(`unsubscribe_error:${formatProductionRuntimeDiagnostic(error)}`); }
       this.unsubscribe = null;
       if (this.stream) {
         const timeoutMs = this.options.streamDisconnectTimeoutMs ?? DEFAULT_PRODUCTION_DISCONNECT_TIMEOUT_MS;
@@ -312,10 +331,10 @@ export class ProductionIngestionRuntime {
       this.workerPumpStopping = true;
       this.wakeWorker();
       if (this.workerPumpPromise) await this.workerPumpPromise;
-      try { if (this.controller) await this.controller.stop(); } catch (error) { this.log(`controller_stop_error:${safeError(error)}`); }
-      try { if (this.pool) await closeDatabasePool(this.pool); } catch (error) { this.log(`pool_close_error:${safeError(error)}`); }
+      try { if (this.controller) await this.controller.stop(); } catch (error) { this.log(`controller_stop_error:${formatProductionRuntimeDiagnostic(error)}`); }
+      try { if (this.pool) await closeDatabasePool(this.pool); } catch (error) { this.log(`pool_close_error:${formatProductionRuntimeDiagnostic(error)}`); }
       this.stopped = true;
-      const termination: ProductionTermination = Object.freeze({ reason: this.terminationReason!, fatal: this.terminationFatal, counters: Object.freeze({ ...this.counters }) });
+      const termination: ProductionTermination = Object.freeze({ reason: this.terminationReason!, fatal: this.terminationFatal, fatalDiagnostic: this.fatalDiagnostic, counters: Object.freeze({ ...this.counters }) });
       this.termination = termination;
       this.resolveTermination(termination);
     })();
